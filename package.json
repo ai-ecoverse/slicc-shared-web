@@ -11,6 +11,16 @@
   "engines": {
     "node": ">=24"
   },
+  "fledgling": {
+    "provider": "github",
+    "workflow": "release.yml",
+    "repo": "ai-ecoverse/slicc-shared-web",
+    "publish": true
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "exports": {
     "./biome": "./biome.json",
     "./tsconfig.json": "./tsconfig.json",
@@ -30,9 +40,13 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "lint": "biome check . && bin/slicc-lint-comments.sh && bin/slicc-no-unit-tests.sh && shellcheck bin/*.sh"
+    "lint": "biome check . && bin/slicc-lint-comments.sh && bin/slicc-no-unit-tests.sh && shellcheck bin/*.sh",
+    "trust": "npx fledgling sync -y --skip-publish",
+    "trust:dry": "npx fledgling sync --dry-run -y --skip-publish",
+    "release": "semantic-release"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15"
+    "@biomejs/biome": "2.5.15",
+    "semantic-release": "25.0.9"
   }
 }
