@@ -1,7 +1,7 @@
 {
   "name": "@ai-ecoverse/slicc-shared-web",
   "version": "0.0.0",
-  "description": "Shared Renovate, Biome, TypeScript, lefthook and GitHub Actions configuration for SLICC's web repos",
+  "description": "Shared Renovate, Biome, TypeScript, lefthook and GitHub Actions configuration, plus the CDP integration-test harness, for SLICC's web repos",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -26,7 +26,9 @@
     "./tsconfig.json": "./tsconfig.json",
     "./lefthook.yml": "./lefthook.yml",
     "./package.json": "./package.json",
-    "./mcr.config.mjs": "./mcr.config.mjs"
+    "./mcr.config.mjs": "./mcr.config.mjs",
+    "./harness": "./harness/index.mjs",
+    "./harness/global": "./harness/global.mjs"
   },
   "bin": {
     "slicc-agents-md": "bin/slicc-agents-md.sh",
@@ -38,6 +40,7 @@
   "files": [
     "bin",
     "biome.json",
+    "harness",
     "default.json",
     "lefthook.yml",
     "mcr.config.mjs",
@@ -45,12 +48,29 @@
   ],
   "scripts": {
     "lint": "bin/slicc-lint.sh && shellcheck bin/*.sh",
+    "pretest": "playwright-core install --no-shell chromium",
+    "test": "node --test --test-global-setup=harness/global.mjs test/integration/*.test.mjs && node test/integration/verify.mjs",
+    "test:unit": "mcr -c test/unit/mcr.config.mjs node --test 'test/unit/**/*.test.mjs'",
     "trust": "npx fledgling sync -y --skip-publish",
     "trust:dry": "npx fledgling sync --dry-run -y --skip-publish",
     "release": "semantic-release"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
+    "monocart-coverage-reports": "2.13.0",
+    "playwright-core": "1.63.0",
     "semantic-release": "25.0.9"
+  },
+  "peerDependencies": {
+    "monocart-coverage-reports": ">=2.13.0",
+    "playwright-core": ">=1.50.0"
+  },
+  "peerDependenciesMeta": {
+    "monocart-coverage-reports": {
+      "optional": true
+    },
+    "playwright-core": {
+      "optional": true
+    }
   }
 }
