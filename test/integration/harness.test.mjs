@@ -38,7 +38,7 @@ test('types into the page, overrides files and opens a second tab', async (t) =>
   });
   await page.goto('/');
   await page.until(() => document.activeElement?.id === 'field');
-  await page.type('ab');
+  await page.type('a.b');
   await page.press('ArrowLeft');
   await page.press(' ');
   await page.insert('c');
@@ -46,7 +46,7 @@ test('types into the page, overrides files and opens a second tab', async (t) =>
   await page.press('X', 'shift');
   await page.press('Escape');
   await page.enter();
-  assert.equal(await page.evaluate(() => document.querySelector('#field').value), 'a Xb');
+  assert.equal(await page.evaluate(() => document.querySelector('#field').value), 'a. Xb');
   await page.until((count) => window.report && count > 0, seen.length);
   assert.deepEqual(seen, ['/']);
   const second = await page.tab();
