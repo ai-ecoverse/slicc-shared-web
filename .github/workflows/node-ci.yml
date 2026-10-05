@@ -40,9 +40,9 @@ jobs:
           LINT: ${{ inputs.lint }}
         run: bash -c "$LINT"
 
-      - name: Install Chromium
+      - name: Chromium system dependencies
         if: inputs.chromium
-        run: npx playwright-core install --with-deps --no-shell chromium
+        run: npx playwright-core install-deps chromium
 
       - name: Integration tests with coverage, CPU profiles, and screenshots
         env:
