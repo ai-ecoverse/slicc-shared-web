@@ -1,0 +1,38 @@
+{
+  "name": "@ai-ecoverse/slicc-shared-web",
+  "version": "0.0.0",
+  "description": "Shared Renovate, Biome, TypeScript, lefthook and GitHub Actions configuration for SLICC's web repos",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ai-ecoverse/slicc-shared-web.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    "./biome": "./biome.json",
+    "./tsconfig.json": "./tsconfig.json",
+    "./lefthook.yml": "./lefthook.yml",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "slicc-diff-cover": "bin/slicc-diff-cover.sh",
+    "slicc-lint-comments": "bin/slicc-lint-comments.sh",
+    "slicc-no-unit-tests": "bin/slicc-no-unit-tests.sh"
+  },
+  "files": [
+    "bin",
+    "biome.json",
+    "default.json",
+    "lefthook.yml",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "lint": "biome check . && bin/slicc-lint-comments.sh && bin/slicc-no-unit-tests.sh && shellcheck bin/*.sh"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15"
+  }
+}

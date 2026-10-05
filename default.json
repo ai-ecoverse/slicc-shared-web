@@ -1,0 +1,67 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Root Renovate preset for SLICC's web repos. Extend it with github>ai-ecoverse/slicc-shared-web and keep repo-specific rules in the repo's own renovate.json.",
+    "Every dependency updates in its own PR so a breaking bump fails in isolation; only purposeful cohesion groups exist, never a catch-all group.",
+    "Automerge is on: a PR merges by itself once CI is green and the release is old enough."
+  ],
+  "extends": ["config:recommended"],
+  "semanticCommits": "enabled",
+  "rebaseWhen": "conflicted",
+  "automerge": true,
+  "automergeType": "pr",
+  "platformAutomerge": true,
+  "minimumReleaseAge": "7 days",
+  "prHourlyLimit": 4,
+  "internalChecksFilter": "strict",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "minimumReleaseAge": "0 days"
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "npm packages pinned by exact version in jsDelivr URLs inside sources, such as the tar library slicc-bios imports at runtime.",
+      "managerFilePatterns": ["/(^|/)src/.+\\.(js|mjs|ts)$/"],
+      "matchStrings": [
+        "https://cdn\\.jsdelivr\\.net/npm/(?<depName>(?:@[^/@\\s'\"`]+/)?[^/@\\s'\"`]+)@(?<currentValue>\\d[^/\\s'\"`]*)"
+      ],
+      "datasourceTemplate": "npm"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Pin npm dependencies to exact versions so every change is a visible package.json diff in its own PR. engines and peerDependencies keep their ranges.",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies", "devDependencies"],
+      "rangeStrategy": "pin"
+    },
+    {
+      "description": "Major bumps wait longer: more risk of breaking changes and a more attractive target for malicious releases.",
+      "matchUpdateTypes": ["major"],
+      "minimumReleaseAge": "14 days"
+    },
+    {
+      "description": "Our own packages and shared config ship together; take them as soon as they are released.",
+      "matchPackageNames": ["@ai-ecoverse/{/,}**", "ai-ecoverse/slicc-shared-web"],
+      "minimumReleaseAge": "0 days"
+    },
+    {
+      "matchPackageNames": ["semantic-release", "@semantic-release/{/,}**"],
+      "groupName": "semantic-release packages"
+    },
+    {
+      "description": "Formatter bumps can reflow existing code and fail the Biome check; label them so they stand out when they do.",
+      "matchPackageNames": ["@biomejs/biome"],
+      "addLabels": ["formatter-bump"]
+    },
+    {
+      "description": "Packages carried with a patch-package patch. A bump orphans the version-pinned patch, so group them and never automerge.",
+      "matchPackageNames": ["@zenfs/core", "@zenfs/dom"],
+      "groupName": "patched dependencies",
+      "groupSlug": "patched-deps",
+      "addLabels": ["patched-dependency"],
+      "automerge": false
+    }
+  ]
+}
