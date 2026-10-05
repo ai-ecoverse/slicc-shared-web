@@ -25,10 +25,13 @@
     "./biome": "./biome.json",
     "./tsconfig.json": "./tsconfig.json",
     "./lefthook.yml": "./lefthook.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./mcr.config.mjs": "./mcr.config.mjs"
   },
   "bin": {
+    "slicc-agents-md": "bin/slicc-agents-md.sh",
     "slicc-diff-cover": "bin/slicc-diff-cover.sh",
+    "slicc-lint": "bin/slicc-lint.sh",
     "slicc-lint-comments": "bin/slicc-lint-comments.sh",
     "slicc-no-unit-tests": "bin/slicc-no-unit-tests.sh"
   },
@@ -37,10 +40,11 @@
     "biome.json",
     "default.json",
     "lefthook.yml",
+    "mcr.config.mjs",
     "tsconfig.json"
   ],
   "scripts": {
-    "lint": "biome check . && bin/slicc-lint-comments.sh && bin/slicc-no-unit-tests.sh && shellcheck bin/*.sh",
+    "lint": "bin/slicc-lint.sh && shellcheck bin/*.sh",
     "trust": "npx fledgling sync -y --skip-publish",
     "trust:dry": "npx fledgling sync --dry-run -y --skip-publish",
     "release": "semantic-release"

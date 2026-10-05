@@ -8,4 +8,14 @@ if [ ! -f "$dir/check.mjs" ]; then
     curl -fsSL -o "$dir/$file.mjs" "https://raw.githubusercontent.com/ai-ecoverse/slicc/$sha/packages/dev-tools/no-comment/$file.mjs"
   done
 fi
-exec node "$dir/check.mjs" --force "$@"
+report=$(node "$dir/check.mjs" --force "$@" 2>&1) || true
+if [ -z "$report" ]; then
+  printf 'slicc-lint-comments: the no-comment checker produced no report\n' >&2
+  exit 1
+fi
+rest=$(printf '%s\n' "$report" | grep -vE '^ok: |^(.+/)?AGENTS\.md: documentation file is not allowed' || true)
+if [ -n "$rest" ]; then
+  printf '%s\n' "$rest" >&2
+  exit 1
+fi
+printf 'ok: no comments, and no documentation besides README.md and AGENTS.md\n'

@@ -11,6 +11,8 @@ pre-commit:
       run: npx --no-install slicc-lint-comments
     - name: no unit tests in git
       run: npx --no-install slicc-no-unit-tests
+    - name: AGENTS.md
+      run: npx --no-install slicc-agents-md
     - name: diff coverage
       glob: "src/**.{js,mjs,ts}"
       run: npm run --silent test:unit && npx --no-install slicc-diff-cover
