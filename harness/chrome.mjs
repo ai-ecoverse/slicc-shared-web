@@ -93,7 +93,18 @@ export async function launch({
     flatten: true,
   });
 
-  async function finish(pages, browserContextId, dir) {
+  async function tabs() {
+    const { targetInfos } = await cdp.send('Target.getTargets');
+    return targetInfos.filter(({ type }) => type === 'page').map(({ targetId }) => targetId);
+  }
+
+  async function sweep(before) {
+    const added = (await tabs()).filter((targetId) => !before.has(targetId));
+    const closing = added.map((targetId) => cdp.send('Target.closeTarget', { targetId }));
+    await Promise.all(closing.map((sent) => sent.catch(ignore)));
+  }
+
+  async function finish(pages, browserContextId, dir, before) {
     const shots = pages.map((opened, i) =>
       opened.screenshot(new URL(`tab-${i + 1}.png`, dir)).catch(ignore)
     );
@@ -102,7 +113,7 @@ export async function launch({
     for (const opened of pages) opened.dispose();
     remote.reset();
     const closing = shared
-      ? Promise.all(pages.map((opened) => opened.close().catch(ignore)))
+      ? sweep(before)
       : cdp.send('Target.disposeBrowserContext', { browserContextId });
     await bounded(closing, 'dispose');
   }
@@ -117,12 +128,13 @@ export async function launch({
       const dir = new URL(`${suite}/${slug(t.name)}/`, artifacts);
       await mkdir(dir, { recursive: true });
       const { browserContextId } = shared ? {} : await cdp.send('Target.createBrowserContext');
+      const before = new Set(shared ? await tabs() : []);
       record.begin(browserContextId, dir, `${suite}-${slug(t.name)}`);
       server.requests.length = 0;
       server.overrides.clear();
       server.overridden.clear();
       const pages = [];
-      t.after(() => finish(pages, browserContextId, dir));
+      t.after(() => finish(pages, browserContextId, dir, before));
       const tab = async () => {
         const opened = page(cdp, await record.open(browserContextId), server, timeout);
         pages.push(opened);
