@@ -23,6 +23,6 @@ The hooks expect two scripts in each repo: `test:unit`, which writes `coverage/u
 ## Rules every repo follows
 
 - No comments anywhere, and no `.md` files except README.md and AGENTS.md.
-- Agent guidance lives in AGENTS.md only, at most 1,000 characters per file. There is no CLAUDE.md, not even as a symlink, since Claude reads AGENTS.md.
+- Agent guidance committed to a repo lives in AGENTS.md only, at most 1,000 characters per file. The repo has no CLAUDE.md, not even as a symlink, since Claude reads AGENTS.md. The check covers tracked and untracked files; gitignored local files are personal and stay out of it.
 - Unit tests stay out of git, in a gitignored `test/unit/`. The pre-commit hook requires them to execute every staged line in `src/`.
 - Integration tests are committed and run in CI.
