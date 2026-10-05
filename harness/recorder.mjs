@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, relative } from 'node:path';
 import { cwd } from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { ignore, raw, samples, sleep } from './util.mjs';
+import { bounded, ignore, raw, samples, sleep, TIMED_OUT } from './util.mjs';
 
 const profiled = new Set(['page', 'worker', 'service_worker', 'shared_worker']);
 const nested = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
@@ -32,13 +32,10 @@ export async function breakpoints(server, exits) {
 
 export function covered(server, prefixes) {
   return ({ url }) => {
-    if (!url.startsWith(server.url)) return false;
-    const { pathname } = new URL(url);
-    return (
-      /\.m?js$/.test(pathname) &&
-      !pathname.includes('/node_modules/') &&
-      prefixes.some((prefix) => pathname.startsWith(prefix))
-    );
+    if (!server.source(url)) return false;
+    const { pathname, protocol } = new URL(url);
+    const ours = protocol === 'chrome-extension:' || prefixes.some((p) => pathname.startsWith(p));
+    return ours && /\.m?js$/.test(pathname) && !pathname.includes('/node_modules/');
   };
 }
 
@@ -180,9 +177,11 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
       url: 'about:blank',
       browserContextId,
     });
-    const sessionId = await tab(targetId).session;
+    const sessionId = await bounded(tab(targetId).session, 'attach');
     tabs.delete(targetId);
-    return sessionId;
+    if (sessionId === TIMED_OUT) throw new Error(`Target.createTarget: ${targetId} never attached`);
+    if (run && !run.context) run.context = sessions.get(sessionId)?.browserContextId;
+    return { sessionId, targetId };
   }
 
   function begin(context, dir, name) {

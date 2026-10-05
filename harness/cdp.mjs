@@ -7,8 +7,18 @@ export async function connect(url) {
   const pending = new Map();
   const listeners = new Set();
   let id = 0;
+  const drop = (sessionId, reason) => {
+    for (const [key, call] of pending) {
+      if (call.sessionId !== sessionId) continue;
+      pending.delete(key);
+      call.reject(new Error(`${call.method}: ${reason}`));
+    }
+  };
   socket.onmessage = ({ data }) => {
     const message = JSON.parse(data);
+    if (message.method === 'Target.detachedFromTarget')
+      drop(message.params.sessionId, 'target detached');
+    if (message.method === 'Inspector.targetCrashed') drop(message.sessionId, 'target crashed');
     const call = pending.get(message.id);
     pending.delete(message.id);
     if (!call) for (const listener of listeners) listener(message);
@@ -21,7 +31,7 @@ export async function connect(url) {
   return {
     send: (method, params = {}, sessionId) =>
       new Promise((resolve, reject) => {
-        pending.set(++id, { method, resolve, reject });
+        pending.set(++id, { method, sessionId, resolve, reject });
         socket.send(JSON.stringify({ id, method, params, sessionId }));
       }),
     on: (listener) => {
