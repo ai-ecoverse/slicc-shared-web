@@ -42,9 +42,19 @@
       "minimumReleaseAge": "14 days"
     },
     {
-      "description": "Our own packages and shared config ship together; take them as soon as they are released.",
-      "matchPackageNames": ["@ai-ecoverse/{/,}**", "ai-ecoverse/slicc-shared-web"],
-      "minimumReleaseAge": "0 days"
+      "description": "Our own packages and shared config ship together: take them as soon as they are released, ahead of the hourly PR limit, whether Renovate sees them by package name (npm, reusable workflows, git URLs) or by dependency name.",
+      "matchPackageNames": [
+        "@ai-ecoverse/{/,}**",
+        "ai-ecoverse/**",
+        "https://github.com/ai-ecoverse/**"
+      ],
+      "minimumReleaseAge": "0 days",
+      "prPriority": 10
+    },
+    {
+      "matchDepNames": ["@ai-ecoverse/{/,}**"],
+      "minimumReleaseAge": "0 days",
+      "prPriority": 10
     },
     {
       "matchPackageNames": ["semantic-release", "@semantic-release/{/,}**"],
