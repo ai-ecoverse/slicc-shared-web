@@ -21,7 +21,7 @@ const types = {
   '.wasm': 'application/wasm',
 };
 
-function type(path) {
+export function type(path) {
   return types[extname(path)] ?? 'application/octet-stream';
 }
 

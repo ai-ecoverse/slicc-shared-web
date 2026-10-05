@@ -64,13 +64,5 @@
   "peerDependencies": {
     "monocart-coverage-reports": ">=2.13.0",
     "playwright-core": ">=1.50.0"
-  },
-  "peerDependenciesMeta": {
-    "monocart-coverage-reports": {
-      "optional": true
-    },
-    "playwright-core": {
-      "optional": true
-    }
   }
 }

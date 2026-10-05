@@ -24,11 +24,12 @@ export function keystroke(key, modifiers) {
   return { key, code, windowsVirtualKeyCode: keyCode, modifiers: bits, text };
 }
 
-export function settle() {
+export function settle(ms = 1000) {
   const finite = document
     .getAnimations()
     .filter((animation) => animation.effect?.getComputedTiming().endTime < Infinity);
-  return Promise.all(finite.map((animation) => animation.finished.catch(() => null)));
+  const done = Promise.all(finite.map((animation) => animation.finished.catch(() => null)));
+  return Promise.race([done, new Promise((resolve) => setTimeout(resolve, ms))]);
 }
 
 export function mark() {

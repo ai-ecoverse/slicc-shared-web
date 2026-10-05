@@ -1,14 +1,16 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { type } from './server.mjs';
 import { cache, ignore } from './util.mjs';
 
 const cors = [{ name: 'access-control-allow-origin', value: '*' }];
 const store = new URL('cdn/', cache);
 
 export async function download(url) {
-  const { host, pathname } = new URL(url);
-  const file = new URL(`./${host}${pathname}`, store);
+  const { host, pathname, search } = new URL(url);
+  const query = search ? encodeURIComponent(search) : '';
+  const file = new URL(`./${host}${pathname}${query}`, store);
   const hit = await readFile(file).catch(ignore);
   if (hit) return hit;
   const response = await fetch(url);
@@ -19,10 +21,6 @@ export async function download(url) {
   await writeFile(partial, body);
   await rename(partial, file);
   return body;
-}
-
-function contentType(url) {
-  return new URL(url).pathname.endsWith('.js') ? 'text/javascript' : 'application/octet-stream';
 }
 
 export async function cdn(cdp, remotes) {
@@ -46,7 +44,10 @@ export async function cdn(cdp, remotes) {
     return cdp.send('Fetch.fulfillRequest', {
       requestId,
       responseCode: 200,
-      responseHeaders: [...cors, { name: 'content-type', value: contentType(request.url) }],
+      responseHeaders: [
+        ...cors,
+        { name: 'content-type', value: type(new URL(request.url).pathname) },
+      ],
       body: sent.toString('base64'),
     });
   }

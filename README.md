@@ -32,7 +32,7 @@ The hooks expect two scripts in each repo: `test:unit`, which writes `coverage/u
 
 `harness/` drives playwright-core's Chromium over raw CDP, as its only client, from `node --test`. Every page, service worker, shared worker and dedicated worker, nested ones included, starts paused, gets coverage and the CPU profiler switched on in the same tick, and only then runs. Each test gets its own browser context and leaves `artifacts/<suite>/<test>/` behind: one CPU profile per target and snapshot, a screenshot per tab and a `console.log` of every target. The global teardown merges the raw coverage into `coverage/` (console table, lcov, V8 HTML) and writes `artifacts/hotspots.md`, the 15 frames with the most self time in the repo's own scripts.
 
-A repo describes what to serve and launches the browser once per test file:
+`playwright-core` and `monocart-coverage-reports` are peer dependencies; pin both in the repo's `devDependencies`. A repo describes what to serve and launches the browser once per test file:
 
 ```js
 import { launch } from '@ai-ecoverse/slicc-shared-web/harness';
