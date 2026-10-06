@@ -76,6 +76,14 @@ export function fresh() {
   return !window.stale && document.readyState === 'complete' && location.href !== 'about:blank';
 }
 
+const specials = { Infinity, '-Infinity': -Infinity, NaN, '-0': -0 };
+
+export function decoded({ value, unserializableValue }) {
+  if (unserializableValue === undefined) return value;
+  if (unserializableValue.endsWith('n')) return BigInt(unserializableValue.slice(0, -1));
+  return specials[unserializableValue];
+}
+
 export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
   const send = (method, params) => cdp.send(method, params, sessionId);
   const errors = [];
@@ -99,7 +107,7 @@ export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
       returnByValue: true,
     });
     if (exceptionDetails) throw new Error(exceptionDetails.exception?.description);
-    return result.value;
+    return decoded(result);
   }
 
   async function until(fn, ...args) {

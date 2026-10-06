@@ -15,6 +15,8 @@ test('profiles the page, its dedicated and nested workers, and a shared worker',
   await page.goto('/');
   assert.equal(await page.evaluate(() => typeof window.fixture === 'object'), true);
   assert.equal(await page.until(() => document.title), 'harness fixture');
+  assert.equal(await page.until(() => Infinity), Infinity);
+  assert.equal(await page.evaluate(() => 1n), 1n);
   assert.equal(await page.evaluate(() => crossOriginIsolated), true);
   assert.deepEqual(await page.evaluate(() => window.fixture.worker()), {
     outer: 46368,
