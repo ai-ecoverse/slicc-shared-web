@@ -13,7 +13,8 @@ after(() => chrome.close());
 test('profiles the page, its dedicated and nested workers, and a shared worker', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  await page.until(() => typeof window.fixture === 'object');
+  assert.equal(await page.evaluate(() => typeof window.fixture === 'object'), true);
+  assert.equal(await page.until(() => document.title), 'harness fixture');
   assert.equal(await page.evaluate(() => crossOriginIsolated), true);
   assert.deepEqual(await page.evaluate(() => window.fixture.worker()), {
     outer: 46368,

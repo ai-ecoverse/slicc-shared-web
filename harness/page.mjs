@@ -73,7 +73,7 @@ export function mark() {
 }
 
 export function fresh() {
-  return !window.stale;
+  return !window.stale && document.readyState === 'complete' && location.href !== 'about:blank';
 }
 
 export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
@@ -106,11 +106,17 @@ export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
     const deadline = Date.now() + timeout;
     let last;
     while (Date.now() < deadline) {
-      last = await evaluate(fn, ...args).catch((error) => error.message);
-      if (last === true) return;
+      try {
+        last = await evaluate(fn, ...args);
+        if (last) return last;
+      } catch (error) {
+        last = error.message;
+      }
       await sleep(25);
     }
-    throw new Error(`Timed out waiting for ${fn}\nlast result: ${JSON.stringify(last)}`);
+    throw new Error(
+      `Timed out waiting for a truthy result from ${fn}\nlast result: ${JSON.stringify(last)}`
+    );
   }
 
   async function press(key, ...modifiers) {
@@ -120,9 +126,16 @@ export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
   }
 
   async function navigate(expression) {
-    await evaluate(mark);
-    await send('Runtime.evaluate', { expression });
-    await until(fresh);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await evaluate(mark);
+      await send('Runtime.evaluate', { expression });
+      try {
+        await until(fresh);
+        return;
+      } catch (error) {
+        if (attempt === 1) throw error;
+      }
+    }
   }
 
   return {
