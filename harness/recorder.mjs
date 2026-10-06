@@ -154,7 +154,12 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
   async function paused(sessionId) {
     const target = sessions.get(sessionId);
     if (target?.type === 'worker') await dump(sessionId, target, false);
-    else await checkpoint();
+    else {
+      const { result } = await cdp
+        .send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId)
+        .catch(() => ({ result: {} }));
+      if (result?.value && result.value !== 'about:blank') await checkpoint();
+    }
     await cdp.send('Debugger.resume', {}, sessionId).catch(ignore);
   }
 
