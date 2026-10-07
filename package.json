@@ -28,7 +28,8 @@
     "./package.json": "./package.json",
     "./mcr.config.mjs": "./mcr.config.mjs",
     "./harness": "./harness/index.mjs",
-    "./harness/global": "./harness/global.mjs"
+    "./harness/global": "./harness/global.mjs",
+    "./pnpmfile.mjs": "./pnpmfile.mjs"
   },
   "bin": {
     "slicc-agents-md": "bin/slicc-agents-md.sh",
@@ -44,7 +45,8 @@
     "default.json",
     "lefthook.yml",
     "mcr.config.mjs",
-    "tsconfig.json"
+    "tsconfig.json",
+    "pnpmfile.mjs"
   ],
   "scripts": {
     "lint": "bin/slicc-lint.sh && shellcheck bin/*.sh",
@@ -59,6 +61,7 @@
     "@biomejs/biome": "2.5.15",
     "monocart-coverage-reports": "2.13.0",
     "playwright-core": "1.63.0",
+    "pnpm": "12.9.1",
     "semantic-release": "25.0.9"
   },
   "peerDependencies": {
