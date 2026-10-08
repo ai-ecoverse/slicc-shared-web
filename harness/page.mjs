@@ -84,7 +84,17 @@ export function decoded({ value, unserializableValue }) {
   return specials[unserializableValue];
 }
 
-export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
+export const STALL_AFTER = 30000;
+
+export function page(
+  cdp,
+  { sessionId, targetId },
+  server,
+  timeout = 30000,
+  { stall, stallAfter = STALL_AFTER } = {}
+) {
+  let stalls = 0;
+  const probes = new Set();
   const send = (method, params, ms) => cdp.send(method, params, sessionId, ms);
   const errors = [];
   const responses = [];
@@ -99,15 +109,34 @@ export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
     if (method === 'Network.responseReceived') responses.push(params.response);
   });
 
+  async function capture() {
+    stalls += 1;
+    const tag = `stall-${stalls}`;
+    const shot = await send('Page.captureScreenshot', { format: 'png' }, 10000).catch(() => null);
+    await stall(tag, shot?.data ? Buffer.from(shot.data, 'base64') : null);
+  }
+
+  function probe() {
+    const running = capture().catch(() => undefined);
+    probes.add(running);
+    void running.then(() => probes.delete(running));
+  }
+
   async function run(fn, args, ms) {
     const expression = `(${fn})(...${JSON.stringify(args)})`;
-    const { result, exceptionDetails } = await send(
-      'Runtime.evaluate',
-      { expression, awaitPromise: true, returnByValue: true },
-      ms
-    );
-    if (exceptionDetails) throw new Error(exceptionDetails.exception?.description);
-    return decoded(result);
+    const at = Math.min(stallAfter, Math.max(ms - 1000, ms / 2));
+    const timer = stall ? setTimeout(probe, at) : null;
+    try {
+      const { result, exceptionDetails } = await send(
+        'Runtime.evaluate',
+        { expression, awaitPromise: true, returnByValue: true },
+        ms
+      );
+      if (exceptionDetails) throw new Error(exceptionDetails.exception?.description);
+      return decoded(result);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   function evaluate(fn, ...args) {
@@ -161,6 +190,7 @@ export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
     evaluate,
     until,
     within,
+    probed: () => Promise.all(probes),
     press,
     goto: (path) => navigate(`location.assign(${JSON.stringify(new URL(path, server.url).href)})`),
     reload: () => navigate('location.reload()'),

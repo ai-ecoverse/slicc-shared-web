@@ -65,8 +65,48 @@ async function entry(server, script) {
   };
 }
 
+function frames(params) {
+  return (params.callFrames ?? [])
+    .slice(0, 3)
+    .map(
+      (frame) =>
+        `${frame.functionName || '(anonymous)'} ${pathOf(frame.url) || frame.url}:${frame.location.lineNumber + 1}`
+    )
+    .join(' < ');
+}
+
+async function sample(cdp, pauses, [sessionId, target], dir, tag) {
+  const send = (method) => cdp.send(method, {}, sessionId, 8000);
+  const stopped = await send('Profiler.stop').catch((error) => ({ error }));
+  send('Profiler.start').catch(ignore);
+  const pause = pauses.get(sessionId);
+  const state = pause ? `paused (${pause.reason})` : 'running';
+  if (!stopped.profile) return `${label(target)}: ${state}, no profile (${stopped.error?.message})`;
+  const name = `${tag}-${label(target)}-${sessionId.slice(0, 6)}.cpuprofile`;
+  await writeFile(new URL(name, dir), JSON.stringify(stopped.profile)).catch(ignore);
+  return `${label(target)}: ${state}, profile ${name}`;
+}
+
+function held(pauses) {
+  return [...pauses.values()].map(
+    (pause) =>
+      `paused ${pause.type} ${pause.targetId} ${pause.url} since ${pause.since}: ${pause.reason}`
+  );
+}
+
+function pauseOf(target = {}, params) {
+  return {
+    type: target.type ?? 'unknown',
+    targetId: target.targetId ?? '?',
+    url: target.url ?? '?',
+    since: new Date().toISOString(),
+    reason: `${params.reason}: ${frames(params)}`,
+  };
+}
+
 export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = {}) {
   const sessions = new Map();
+  const pauses = new Map();
   const tabs = new Map();
   const ours = covered(server, coverage);
   let run = null;
@@ -151,21 +191,36 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
     run.console.push(`${label(target)}: ${line}`);
   }
 
+  async function capture(sessionId, target) {
+    if (target?.type === 'worker') return dump(sessionId, target, false);
+    const { result } = await cdp
+      .send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId)
+      .catch(() => ({ result: {} }));
+    if (result?.value && result.value !== 'about:blank') await checkpoint();
+  }
+
   async function paused(sessionId) {
-    const target = sessions.get(sessionId);
-    if (target?.type === 'worker') await dump(sessionId, target, false);
-    else {
-      const { result } = await cdp
-        .send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId)
-        .catch(() => ({ result: {} }));
-      if (result?.value && result.value !== 'about:blank') await checkpoint();
+    try {
+      await bounded(capture(sessionId, sessions.get(sessionId)).catch(ignore), 'pause', 10000);
+    } finally {
+      await cdp.send('Debugger.resume', {}, sessionId, 10000).catch(ignore);
     }
-    await cdp.send('Debugger.resume', {}, sessionId).catch(ignore);
+  }
+
+  async function stall(dir, tag) {
+    const current = [...sessions].filter(([, target]) => target.browserContextId === run?.context);
+    const lines = await Promise.all(current.map((entry) => sample(cdp, pauses, entry, dir, tag)));
+    const all = [...lines, ...held(pauses)];
+    for (const line of all) run?.console.push(`${tag}: ${line}`);
+    return all;
   }
 
   cdp.on(async ({ method, params, sessionId }) => {
     if (method === 'Target.attachedToTarget') await attach(params);
-    if (method === 'Target.detachedFromTarget') sessions.delete(params.sessionId);
+    if (method === 'Target.detachedFromTarget') {
+      sessions.delete(params.sessionId);
+      pauses.delete(params.sessionId);
+    }
     if (method === 'Runtime.consoleAPICalled') {
       const text = params.args.map((arg) => arg.value ?? arg.description).join(' ');
       log(sessionId, `${params.type} ${text}`);
@@ -174,7 +229,11 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
       const { exception, text } = params.exceptionDetails;
       log(sessionId, `uncaught ${exception?.description ?? text}`);
     }
-    if (method === 'Debugger.paused') await paused(sessionId);
+    if (method === 'Debugger.paused') {
+      pauses.set(sessionId, pauseOf(sessions.get(sessionId), params));
+      await paused(sessionId);
+    }
+    if (method === 'Debugger.resumed') pauses.delete(sessionId);
   });
 
   async function open(browserContextId) {
@@ -211,5 +270,5 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
     ]);
   }
 
-  return { open, begin, end };
+  return { open, begin, end, stall };
 }
