@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -75,6 +75,7 @@ export async function launch({
   extensions = [],
   args = [],
   timeout,
+  stallAfter,
 } = {}) {
   const server = await serve({ roots, aliases, isolated });
   const found = await unpacked(extensions);
@@ -136,7 +137,13 @@ export async function launch({
       const pages = [];
       t.after(() => finish(pages, browserContextId, dir, before));
       const tab = async () => {
-        const opened = page(cdp, await record.open(browserContextId), server, timeout);
+        const opened = page(cdp, await record.open(browserContextId), server, timeout, {
+          stallAfter,
+          stall: async (tag, png) => {
+            if (png) await writeFile(new URL(`${tag}.png`, dir), png).catch(ignore);
+            await bounded(record.stall(dir, tag), tag, 20000);
+          },
+        });
         pages.push(opened);
         return Object.assign(opened, { tab, dir });
       };
