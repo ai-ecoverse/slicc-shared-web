@@ -154,6 +154,12 @@ export async function trace(cdp, dir, tag, ms = 10000) {
   }
 }
 
+function claim(run) {
+  if (!run || run.traced) return false;
+  run.traced = true;
+  return true;
+}
+
 function contextOf(sessions, parents, sessionId) {
   for (let id = sessionId; id; id = parents.get(id)) {
     const context = sessions.get(id)?.browserContextId;
@@ -267,8 +273,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
   }
 
   async function stall(dir, tag) {
-    const first = Boolean(run && !run.traced);
-    if (run) run.traced = true;
+    const first = claim(run);
     const current = [...sessions].filter(
       ([sessionId]) => contextOf(sessions, parents, sessionId) === run?.context
     );
