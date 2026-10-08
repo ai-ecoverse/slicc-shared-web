@@ -267,12 +267,14 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
   }
 
   async function stall(dir, tag) {
+    const first = Boolean(run && !run.traced);
+    if (run) run.traced = true;
     const current = [...sessions].filter(
       ([sessionId]) => contextOf(sessions, parents, sessionId) === run?.context
     );
     const [lines, traced] = await Promise.all([
       Promise.all(current.map((entry) => sample(cdp, pauses, entry, dir, tag))),
-      tag === 'stall-1' ? trace(cdp, dir, tag) : [],
+      first ? trace(cdp, dir, tag) : [],
     ]);
     const all = [...lines, ...traced, ...held(pauses)];
     for (const line of all) run?.console.push(`${tag}: ${line}`);
