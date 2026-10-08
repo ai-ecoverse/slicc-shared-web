@@ -85,7 +85,7 @@ export function decoded({ value, unserializableValue }) {
 }
 
 export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
-  const send = (method, params) => cdp.send(method, params, sessionId);
+  const send = (method, params, ms) => cdp.send(method, params, sessionId, ms);
   const errors = [];
   const responses = [];
   const bindings = new Map();
@@ -99,23 +99,27 @@ export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
     if (method === 'Network.responseReceived') responses.push(params.response);
   });
 
-  async function evaluate(fn, ...args) {
+  async function run(fn, args, ms) {
     const expression = `(${fn})(...${JSON.stringify(args)})`;
-    const { result, exceptionDetails } = await send('Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-    });
+    const { result, exceptionDetails } = await send(
+      'Runtime.evaluate',
+      { expression, awaitPromise: true, returnByValue: true },
+      ms
+    );
     if (exceptionDetails) throw new Error(exceptionDetails.exception?.description);
     return decoded(result);
   }
 
-  async function until(fn, ...args) {
-    const deadline = Date.now() + timeout;
+  function evaluate(fn, ...args) {
+    return run(fn, args, timeout);
+  }
+
+  async function within(ms, fn, ...args) {
+    const deadline = Date.now() + ms;
     let last;
-    while (Date.now() < deadline) {
+    for (let left = ms; left > 0; left = deadline - Date.now()) {
       try {
-        last = await evaluate(fn, ...args);
+        last = await run(fn, args, left);
         if (last) return last;
       } catch (error) {
         last = error.message;
@@ -123,8 +127,12 @@ export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
       await sleep(25);
     }
     throw new Error(
-      `Timed out waiting for a truthy result from ${fn}\nlast result: ${JSON.stringify(last)}`
+      `Timed out after ${ms} ms waiting for a truthy result from ${fn}\nlast result: ${JSON.stringify(last)}`
     );
+  }
+
+  function until(fn, ...args) {
+    return within(timeout, fn, ...args);
   }
 
   async function press(key, ...modifiers) {
@@ -152,6 +160,7 @@ export function page(cdp, { sessionId, targetId }, server, timeout = 30000) {
     dispose,
     evaluate,
     until,
+    within,
     press,
     goto: (path) => navigate(`location.assign(${JSON.stringify(new URL(path, server.url).href)})`),
     reload: () => navigate('location.reload()'),
