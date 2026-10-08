@@ -142,7 +142,7 @@ export async function launch({
           stallAfter,
           stall: async (tag, png) => {
             if (png) await writeFile(new URL(`${tag}.png`, dir), png).catch(ignore);
-            await bounded(record.stall(dir, tag), tag, 20000);
+            await bounded(record.stall(dir, tag), tag, 45000);
           },
         });
         pages.push(opened);
