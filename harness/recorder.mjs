@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, relative } from 'node:path';
 import { cwd } from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { trace } from './trace.mjs';
 import { bounded, ignore, raw, samples, sleep, TIMED_OUT } from './util.mjs';
 
 const profiled = new Set(['page', 'worker', 'service_worker', 'shared_worker']);
@@ -102,56 +103,6 @@ function pauseOf(target = {}, params) {
     since: new Date().toISOString(),
     reason: `${params.reason}: ${frames(params)}`,
   };
-}
-
-const TRACED = [
-  'toplevel',
-  'devtools.timeline',
-  'disabled-by-default-devtools.timeline',
-  'v8.execute',
-  'disabled-by-default-v8.cpu_profiler',
-];
-
-async function cpuTimes(cdp) {
-  const { processInfo = [] } = await cdp
-    .send('SystemInfo.getProcessInfo', {}, undefined, 5000)
-    .catch(() => ({}));
-  return new Map(processInfo.map((info) => [`${info.type} ${info.id}`, info.cpuTime]));
-}
-
-export async function trace(cdp, dir, tag, ms = 10000) {
-  const events = [];
-  const done = Promise.withResolvers();
-  const off = cdp.on(({ method, params }) => {
-    if (method === 'Tracing.dataCollected') events.push(...params.value);
-    if (method === 'Tracing.tracingComplete') done.resolve();
-  });
-  try {
-    const before = await cpuTimes(cdp);
-    await cdp.send(
-      'Tracing.start',
-      { traceConfig: { includedCategories: TRACED }, transferMode: 'ReportEvents' },
-      undefined,
-      10000
-    );
-    await sleep(ms);
-    await cdp.send('Tracing.end', {}, undefined, 10000);
-    await bounded(done.promise, 'trace', 20000);
-    const after = await cpuTimes(cdp);
-    await writeFile(new URL(`${tag}-trace.json`, dir), JSON.stringify({ traceEvents: events }));
-    const busy = [...after]
-      .map(([name, time]) => [name, time - (before.get(name) ?? 0)])
-      .filter(([, used]) => used > 0.05)
-      .map(([name, used]) => `${name} ${used.toFixed(1)}s`);
-    return [
-      `trace ${tag}-trace.json (${events.length} events)`,
-      `cpu over ${ms / 1000}s: ${busy.join(', ') || 'none'}`,
-    ];
-  } catch (error) {
-    return [`trace failed: ${error.message}`];
-  } finally {
-    off();
-  }
 }
 
 function claim(run) {
@@ -272,16 +223,14 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
     }
   }
 
-  async function stall(dir, tag) {
+  async function stall(dir, tag, pending = []) {
     const first = claim(run);
     const current = [...sessions].filter(
       ([sessionId]) => contextOf(sessions, parents, sessionId) === run?.context
     );
-    const [lines, traced] = await Promise.all([
-      Promise.all(current.map((entry) => sample(cdp, pauses, entry, dir, tag))),
-      first ? trace(cdp, dir, tag) : [],
-    ]);
-    const all = [...lines, ...traced, ...held(pauses)];
+    const sampled = () => Promise.all(current.map((entry) => sample(cdp, pauses, entry, dir, tag)));
+    const [lines, traced] = first ? await trace(cdp, dir, tag, sampled) : [await sampled(), []];
+    const all = [...pending, ...lines, ...traced, ...held(pauses)];
     for (const line of all) run?.console.push(`${tag}: ${line}`);
     return all;
   }

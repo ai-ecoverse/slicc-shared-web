@@ -2,6 +2,13 @@ function fib(n) {
   return n < 2 ? n : fib(n - 1) + fib(n - 2);
 }
 
+function blockOnXhr(url, done) {
+  const request = new XMLHttpRequest();
+  request.open('GET', url, false);
+  request.send();
+  done(request.status);
+}
+
 function ask(worker, message) {
   return new Promise((resolve) => {
     worker.addEventListener('message', ({ data }) => resolve(data), { once: true });
@@ -11,6 +18,7 @@ function ask(worker, message) {
 
 window.fixture = {
   fib,
+  later: (url, ms) => new Promise((resolve) => setTimeout(blockOnXhr, ms, url, resolve)),
   worker: () => ask(new Worker('worker.js', { type: 'module' }), 24),
   shared: () => {
     const worker = new SharedWorker('shared.js', { type: 'module' });
