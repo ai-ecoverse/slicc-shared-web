@@ -57,10 +57,21 @@ function inside(slices, task) {
     .sort((a, b) => a.ts - b.ts || b.dur - a.dur);
 }
 
+function unmatched(slices) {
+  const stacks = new Map();
+  for (const event of [...slices].sort((a, b) => a.ts - b.ts)) {
+    const stack = stacks.get(event.tid) ?? [];
+    if (event.ph === 'B') stack.push(event);
+    if (event.ph === 'E') stack.pop();
+    stacks.set(event.tid, stack);
+  }
+  return [...stacks.values()].flat();
+}
+
 function main(pid, slices, last) {
   const tasks = slices.filter(({ name, ph }) => name === 'RunTask' && ph === 'X');
   const longest = tasks.reduce((most, task) => (task.dur > (most?.dur ?? 0) ? task : most), null);
-  const open = slices.filter(({ ph, ts }) => ph === 'B' && ts < last - 50000);
+  const open = unmatched(slices).filter(({ ts }) => ts < last - 50000);
   const head = `renderer ${pid} main thread: ${tasks.length} tasks`;
   if (open.length) return `${head}, still in ${labels(open)}`;
   if (!longest) return head;

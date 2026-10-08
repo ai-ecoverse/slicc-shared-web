@@ -1,5 +1,9 @@
 const done = new Set(['Network.loadingFinished', 'Network.loadingFailed']);
-const landed = new Set(['Page.frameNavigated', 'Page.frameStoppedLoading']);
+const landed = new Set([
+  'Page.frameNavigated',
+  'Page.frameStoppedLoading',
+  'Page.navigatedWithinDocument',
+]);
 
 export function flights(now = Date.now) {
   const requests = new Map();
