@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import { flights } from './flight.mjs';
 import { sleep } from './util.mjs';
 
 const masks = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
@@ -99,8 +100,11 @@ export function page(
   const errors = [];
   const responses = [];
   const bindings = new Map();
-  const dispose = cdp.on(({ method, params, sessionId: from }) => {
+  const flying = flights();
+  const dispose = cdp.on((message) => {
+    const { method, params, sessionId: from } = message;
     if (from !== sessionId) return;
+    flying.watch(message);
     if (method === 'Runtime.exceptionThrown') {
       const { exception, text } = params.exceptionDetails;
       errors.push(exception?.description ?? text);
@@ -112,8 +116,9 @@ export function page(
   async function capture() {
     stalls += 1;
     const tag = `stall-${stalls}`;
+    const pending = flying.pending();
     const shot = await send('Page.captureScreenshot', { format: 'png' }, 10000).catch(() => null);
-    await stall(tag, shot?.data ? Buffer.from(shot.data, 'base64') : null);
+    await stall(tag, shot?.data ? Buffer.from(shot.data, 'base64') : null, pending);
   }
 
   function probe() {

@@ -140,9 +140,9 @@ export async function launch({
       const tab = async () => {
         const opened = page(cdp, await record.open(browserContextId), server, timeout, {
           stallAfter,
-          stall: async (tag, png) => {
+          stall: async (tag, png, pending) => {
             if (png) await writeFile(new URL(`${tag}.png`, dir), png).catch(ignore);
-            await bounded(record.stall(dir, tag), tag, 45000);
+            await bounded(record.stall(dir, tag, pending), tag, 45000);
           },
         });
         pages.push(opened);
