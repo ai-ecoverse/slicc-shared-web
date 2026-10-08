@@ -7,15 +7,27 @@ import { cache, ignore } from './util.mjs';
 const cors = [{ name: 'access-control-allow-origin', value: '*' }];
 const store = new URL('cdn/', cache);
 
+export const DOWNLOAD_TIMEOUT = 60000;
+
+export async function fetched(url, { attempts = 3, ms = DOWNLOAD_TIMEOUT, fetcher = fetch } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetcher(url, { signal: AbortSignal.timeout(ms) });
+      if (!response.ok) throw new Error(`${response.status} ${url}`);
+      return Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      if (attempt >= attempts || /^4\d\d /.test(error.message)) throw error;
+    }
+  }
+}
+
 export async function download(url) {
   const { host, pathname, search } = new URL(url);
   const query = search ? encodeURIComponent(search) : '';
   const file = new URL(`./${host}${pathname}${query}`, store);
   const hit = await readFile(file).catch(ignore);
   if (hit) return hit;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${response.status} ${url}`);
-  const body = Buffer.from(await response.arrayBuffer());
+  const body = await fetched(url);
   await mkdir(dirname(fileURLToPath(file)), { recursive: true });
   const partial = new URL(`${file.href}.${process.pid}`);
   await writeFile(partial, body);

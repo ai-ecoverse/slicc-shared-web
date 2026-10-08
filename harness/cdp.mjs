@@ -1,3 +1,5 @@
+export const SEND_TIMEOUT = 60000;
+
 export async function connect(url) {
   const socket = new WebSocket(url);
   await new Promise((resolve, reject) => {
@@ -29,10 +31,19 @@ export async function connect(url) {
     for (const call of pending.values()) call.reject(new Error(`${call.method}: socket closed`));
   };
   return {
-    send: (method, params = {}, sessionId) =>
+    send: (method, params = {}, sessionId, ms = SEND_TIMEOUT) =>
       new Promise((resolve, reject) => {
-        pending.set(++id, { method, sessionId, resolve, reject });
-        socket.send(JSON.stringify({ id, method, params, sessionId }));
+        const key = ++id;
+        const timer = setTimeout(() => {
+          pending.delete(key);
+          reject(new Error(`${method}: no answer in ${ms} ms`));
+        }, ms);
+        const settle = (fn) => (value) => {
+          clearTimeout(timer);
+          fn(value);
+        };
+        pending.set(key, { method, sessionId, resolve: settle(resolve), reject: settle(reject) });
+        socket.send(JSON.stringify({ id: key, method, params, sessionId }));
       }),
     on: (listener) => {
       listeners.add(listener);
