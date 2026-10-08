@@ -24,7 +24,7 @@ export async function fetched(url, { attempts = 3, ms = DOWNLOAD_TIMEOUT, fetche
 export async function download(url) {
   const { host, pathname, search } = new URL(url);
   const query = search ? encodeURIComponent(search) : '';
-  const file = new URL(`./${host}${pathname}${query}`, store);
+  const file = new URL(`./${host}${pathname}${query}`.replaceAll('%', '%25'), store);
   const hit = await readFile(file).catch(ignore);
   if (hit) return hit;
   const body = await fetched(url);
@@ -49,7 +49,9 @@ export async function cdn(cdp, remotes) {
       const failure = { requestId, responseCode: state.status, responseHeaders: cors };
       return cdp.send('Fetch.fulfillRequest', failure);
     }
-    const body = await download(request.url).catch(ignore);
+    const body = await download(request.url).catch((error) => {
+      console.warn(`harness: could not serve ${request.url}: ${error.message}`);
+    });
     if (!body) return cdp.send('Fetch.failRequest', { requestId, errorReason: 'Failed' });
     const sent = Buffer.from(body);
     if (state.corrupt) sent[sent.length - 1] ^= 0xff;
