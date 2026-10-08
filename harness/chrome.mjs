@@ -106,6 +106,7 @@ export async function launch({
   }
 
   async function finish(pages, browserContextId, dir, before) {
+    await bounded(Promise.all(pages.map((opened) => opened.probed())), 'probes', 30000);
     const shots = pages.map((opened, i) =>
       opened.screenshot(new URL(`tab-${i + 1}.png`, dir)).catch(ignore)
     );
