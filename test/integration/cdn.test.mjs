@@ -19,11 +19,12 @@ let calls = 0;
 globalThis.fetch = async (url) => {
   calls++;
   if (process.env.UPSTREAM === 'down') throw new Error('offline');
+  if (process.env.UPSTREAM === 'gone') return new Response('', { status: 404 });
   return new Response(process.env.UPSTREAM + ' ' + new URL(url).pathname.split('/').pop());
 };
 const urls = JSON.parse(process.env.URLS);
 const bodies = [];
-for (const url of [...urls, ...urls]) bodies.push(String(await download(url)));
+for (const url of [...urls, ...urls]) bodies.push(String(await download(url).catch((error) => error.message)));
 console.log(JSON.stringify({ bodies, calls }));
 `;
 
@@ -56,5 +57,9 @@ test('a packument is fetched fresh each run, a tarball comes from the cache', as
   assert.deepEqual(await session(cwd, 'down'), {
     bodies: [`v2 ${pack}`, `v1 ${tgz}`, `v2 ${pack}`, `v1 ${tgz}`],
     calls: 3,
+  });
+  assert.deepEqual(await session(cwd, 'gone'), {
+    bodies: [`404 ${packument}`, `v1 ${tgz}`, `404 ${packument}`, `v1 ${tgz}`],
+    calls: 2,
   });
 });

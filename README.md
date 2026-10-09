@@ -59,7 +59,7 @@ test('boots', async (t) => {
 | `isolated` | Send COOP, COEP and CORP on every response, so pages are cross-origin isolated | `false` |
 | `coverage` | URL prefixes whose `.js`/`.mjs` scripts count for coverage. `node_modules/` never does. A `.map` next to a file is used | `['/']` |
 | `exits` | `{ urlPath: [regex, ...] }`: a breakpoint on the first line matching each pattern in that worker script, where the harness takes the worker's coverage and profile before it closes itself | none |
-| `intercept` | Remote URL prefixes answered from a disk cache in `node_modules/.cache/`. Registry documents (anything on a `registry.*` host but a `/-/….tgz` tarball: packuments, abbreviated or full, and dist-tags) are fetched fresh once per test process and only served from the disk cache when the registry can't be reached | none |
+| `intercept` | Remote URL prefixes answered from a disk cache in `node_modules/.cache/`. Registry documents (anything on a `registry.*` host but a `/-/….tgz` tarball: packuments, abbreviated or full, and dist-tags) are fetched fresh once per test process and only served from the disk cache when the registry can't be reached (a `4xx` is passed on) | none |
 | `extensions` | Unpacked extension directories to load. Their scripts are covered and profiled like the repo's own, and tests then run in the default browser context, closing their tabs when they end, because Chrome does not run extensions in the per-test contexts | none |
 | `args` | Extra Chromium flags, such as `--host-resolver-rules` or `--ignore-certificate-errors` | none |
 | `timeout` | How long `page.until` polls and `page.evaluate` waits, in ms | `30000` |

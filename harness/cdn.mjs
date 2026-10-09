@@ -38,6 +38,7 @@ async function save(file, body) {
 
 async function refresh(url, file) {
   const body = await fetched(url).catch(async (error) => {
+    if (/^4\d\d /.test(error.message)) throw error;
     const stale = await readFile(file).catch(ignore);
     if (!stale) throw error;
     console.warn(`harness: serving cached ${url}: ${error.message}`);
