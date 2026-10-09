@@ -125,14 +125,12 @@ const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const running = new Set();
 
 export function kill(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
   if (child.pid > 0 && child.spawnargs?.length) {
     try {
       process.kill(-child.pid, 'SIGKILL');
-      return;
     } catch {}
   }
-  child.kill('SIGKILL');
+  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
 }
 
 function remove(entries) {
