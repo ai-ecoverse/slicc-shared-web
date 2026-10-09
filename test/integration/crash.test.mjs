@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { readdir, readFile } from 'node:fs/promises';
 import { after, test } from 'node:test';
+import { promisify } from 'node:util';
 import { launch } from '@ai-ecoverse/slicc-shared-web/harness';
 
 const roots = [['/', 'test/integration/page/']];
@@ -41,6 +43,18 @@ test('a killed browser fails every call in seconds', async (t) => {
   assert.ok(Date.now() - started < 5000, `${Date.now() - started} ms`);
 });
 
+test('a browser that segfaults leaves its minidump, even when it closes first', async (t) => {
+  const doomed = await launch({ roots });
+  t.after(() => doomed.close());
+  const page = await doomed.page(t);
+  await page.goto('/');
+  process.kill(doomed.pid, 'SIGSEGV');
+  await assert.rejects(
+    page.until(() => false),
+    /browser exited with SIGSEGV/
+  );
+});
+
 test('the crash is in console.log, and every test keeps the browser stderr', async () => {
   const crashed = new URL('a-crashed-page-fails-its-wait-in-seconds/', artifacts);
   const log = await readFile(new URL('console.log', crashed), 'utf8');
@@ -51,4 +65,29 @@ test('the crash is in console.log, and every test keeps the browser stderr', asy
   ]) {
     await readFile(new URL(`${name}/chrome-stderr.log`, artifacts), 'utf8');
   }
+});
+
+test('a browser crash leaves its minidump', async () => {
+  const died = new URL(
+    'a-browser-that-segfaults-leaves-its-minidump-even-when-it-closes-first/',
+    artifacts
+  );
+  const dumps = (await readdir(died)).filter((file) => file.endsWith('.dmp'));
+  assert.equal(dumps.length, 1, dumps.join());
+});
+
+test('a renderer crash leaves its minidump, and slicc-minidump prints its stack', async () => {
+  const crashed = new URL('a-crashed-page-fails-its-wait-in-seconds/', artifacts);
+  const dumps = (await readdir(crashed)).filter((file) => file.endsWith('.dmp'));
+  assert.equal(dumps.length, 1, dumps.join());
+  const script = new URL('../../bin/slicc-minidump.mjs', import.meta.url);
+  const { stdout } = await promisify(execFile)(process.execPath, [
+    script.pathname,
+    new URL(dumps[0], crashed).pathname,
+  ]);
+  const head = stdout.slice(0, 4000);
+  assert.match(stdout, /^crash: \S+/m, head);
+  assert.match(stdout, /^ {2}ptype = renderer$/m, head);
+  assert.match(stdout, /^ {3}0 {2}.+ \+ 0x[0-9a-f]+ {2}\(context\)$/m, head);
+  assert.match(stdout, /^modules:$/m, head);
 });

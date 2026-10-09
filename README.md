@@ -5,12 +5,12 @@ Configuration shared by SLICC's web repos ([slicc-bios](https://github.com/ai-ec
 | File | What it is | How a repo uses it |
 |---|---|---|
 | `default.json` | Root Renovate preset: automerge on, one dependency per PR, exact pins, 7-day release age (14 for majors, 0 for vulnerability fixes and for our own `@ai-ecoverse` packages, which also jump the PR queue), and a manager for jsDelivr pins inside `src/` | `renovate.json`: `{ "extends": ["github>ai-ecoverse/slicc-shared-web"] }` |
-| `.github/workflows/node-ci.yml` | Reusable CI: `npm ci`, lint, Chromium's system libraries, integration tests, hotspots in the job summary, coverage/profiles/screenshots as artifacts. The browser itself comes from each repo's `pretest` | `jobs: { ci: { uses: ai-ecoverse/slicc-shared-web/.github/workflows/node-ci.yml@vX.Y.Z } }` |
+| `.github/workflows/node-ci.yml` | Reusable CI: `npm ci`, lint, Chromium's system libraries, integration tests, hotspots and the stack of every crash dump in the job summary, coverage/profiles/screenshots/crash dumps as artifacts. The browser itself comes from each repo's `pretest` | `jobs: { ci: { uses: ai-ecoverse/slicc-shared-web/.github/workflows/node-ci.yml@vX.Y.Z } }` |
 | `biome.json` | Formatter settings and slicc's strict linter: cognitive complexity ≤ 25, functions ≤ 150 lines, no unused variables or imports, no floating or misused promises, naming conventions, `import type`/`export type`. Test files under `test/` get slicc's test exemptions | `biome.json`: `{ "extends": ["@ai-ecoverse/slicc-shared-web/biome"] }` |
 | `tsconfig.json` | TypeScript base for Node's type stripping | `tsconfig.json`: `{ "extends": "@ai-ecoverse/slicc-shared-web/tsconfig.json", "include": ["src/**/*.ts"] }` |
 | `lefthook.yml` | Pre-commit hooks: Biome, typecheck, no comments, no unit tests in git, AGENTS.md, diff coverage | `lefthook.yml`: `extends: [node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml]` |
 | `mcr.config.mjs` | Unit-test coverage for JS and TS sources in `src/` (TS types are stripped first), written to `coverage/unit/lcov.info` | `test:unit`: `mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --test 'test/unit/**/*.test.mjs'` |
-| `bin/` | `slicc-lint` runs every check below plus Biome and, if the repo has one, `typecheck`. `slicc-lint-comments` runs the [slicc no-comment checker](https://github.com/ai-ecoverse/slicc/tree/main/packages/dev-tools/no-comment) at a pinned commit, allowing AGENTS.md. `slicc-agents-md`, `slicc-no-unit-tests` and `slicc-diff-cover` complete the set | `lint`: `slicc-lint`, and the hooks above |
+| `bin/` | `slicc-lint` runs every check below plus Biome and, if the repo has one, `typecheck`. `slicc-lint-comments` runs the [slicc no-comment checker](https://github.com/ai-ecoverse/slicc/tree/main/packages/dev-tools/no-comment) at a pinned commit, allowing AGENTS.md. `slicc-agents-md`, `slicc-no-unit-tests` and `slicc-diff-cover` complete the set. `slicc-minidump <file.dmp>...` prints a crash dump's stack, described [below](#crash-dumps) | `lint`: `slicc-lint`, and the hooks above |
 | `pnpmfile.mjs` | pnpm's counterpart to the Renovate preset: an `updateConfig` hook that adds `@ai-ecoverse/*` to `minimumReleaseAgeExclude`, so pnpm 12 doesn't hold back our own fresh releases (`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`) while third-party packages keep its age check | in a repo with a pnpm lockfile, as a [config dependency](https://pnpm.io/config-dependencies) in `pnpm-workspace.yaml`: `configDependencies: { '@ai-ecoverse/slicc-shared-web': X.Y.Z }` plus `pnpmfile: node_modules/.pnpm-config/@ai-ecoverse/slicc-shared-web/pnpmfile.mjs` |
 | `harness/` | The CDP integration-test harness, described [below](#integration-test-harness) | `import { launch } from '@ai-ecoverse/slicc-shared-web/harness'`, and `--test-global-setup=node_modules/@ai-ecoverse/slicc-shared-web/harness/global.mjs` |
 
@@ -70,6 +70,7 @@ test('boots', async (t) => {
 - when a renderer crashes, every pending and later call to that target, and to the dedicated workers it started, rejects with `<method>: page renderer crashed (<status>, code <n>) at <url>` (or `worker`, `shared worker`, `service worker`), and `console.log` gets the same line;
 - `until`, `within`, `goto` and `reload` stop retrying and rethrow it;
 - both errors end with the last five lines of the browser's stderr, and each test keeps up to 200 lines it wrote during the test in `chrome-stderr.log`.
+- a test that saw a renderer crash, or a browser that died of anything but `SIGKILL`, keeps Chrome's minidump of it as `<id>.dmp` in its artifact directory (see [Crash dumps](#crash-dumps)).
 
  When one evaluation runs past `stallAfter`, the harness probes once, without interrupting the wait:
 - it adds a `pending` line to `console.log` for every navigation and request of the page that has no answer yet, with its age. A worker's script loads in the worker's own session, so its request is left out. Chrome holds CDP messages to a page while a navigation is waiting for its response, so an evaluation that hangs while the page is idle usually means one of these;
@@ -94,3 +95,18 @@ Why it works the way it does:
 - The attach event can arrive before `Target.createTarget` returns, so new tabs wait on a slot keyed by target id.
 - A worker blocked in `Atomics.wait`, or one that is already gone, may never answer; snapshots give up after 3 s, and closing a context or the browser after 10 s. A call to a target that detaches or crashes fails instead of waiting forever, and a new tab that never attaches fails after 10 s.
 - A WebSocket that has closed takes new messages without an error, and a crashed target never answers, so after a crash every call used to wait out its own deadline: a browser that died 4 s in showed up as `no answer` 15 minutes later. The harness now remembers the crash or the exit and fails each call with it.
+
+## Crash dumps
+
+Chrome for Testing runs crashpad by default and ignores `--crash-dumps-dir` and `--enable-crash-reporter`: on Linux it writes every dump to `~/.config/google-chrome-for-testing/Crash Reports/pending/`. `launch` points it at a fresh directory per browser through `BREAKPAD_DUMP_LOCATION`, waits up to 10 s after a crash for crashpad to finish writing, copies the new dumps into the test's artifact directory and deletes the directory on `close()`. Nothing is uploaded.
+
+Google publishes no symbols for Chrome for Testing: no Breakpad files next to the `chrome-linux64.zip` downloads, and the binary is stripped (only `.eh_frame` and a `.gnu_debuglink` to a file that isn't public). Chrome keeps frame pointers, though, so the stack walks cleanly as `module + offset`, and the dump carries crashpad's annotations: `ver`, `ptype` (`renderer`, `gpu-process`, `browser` and so on), the GPU (`gpu-gl-renderer` shows SwiftShader in CI), the page's origin, and V8 crash keys when V8 sets them.
+
+`slicc-minidump <file.dmp>...` downloads a pinned, checksummed [`minidump-stackwalk`](https://github.com/rust-minidump/rust-minidump) 0.27.0 into `~/.cache/slicc-minidump/` (Linux x64 and macOS) and prints, per dump, the signal and address, the faulting module and offset, the annotations without the command-line switches, the crashing thread's first 40 frames and the module list with build ids. The reusable workflow runs it on every `artifacts/**/*.dmp`, writes the full report next to the dump as `<id>.txt` and puts everything above the module list into the job summary. To read a dump from a CI run locally:
+
+```sh
+gh run download <run-id> -n coverage-profiles-screenshots -D ci
+npx slicc-minidump ci/artifacts/<suite>/<test>/*.dmp
+```
+
+A Linux dump reads fine on a Mac. Offsets are only comparable across dumps from the same `ver`. A frame in `chrome` with the `ud2` instruction and `SIGTRAP` is a deliberate `CHECK` or `IMMEDIATE_CRASH`; `SIGSEGV` with a wild address points at memory corruption, and a top frame in `libvk_swiftshader.so`, `libGLESv2.so` or `libEGL.so` at the software GPU.

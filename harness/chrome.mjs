@@ -2,9 +2,11 @@ import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { env as inherited } from 'node:process';
 import { chromium } from 'playwright-core';
 import { cdn } from './cdn.mjs';
-import { connect } from './cdp.mjs';
+import { CRASHED, connect } from './cdp.mjs';
+import { crashpad } from './dumps.mjs';
 import { extensionSource, unpacked } from './extensions.mjs';
 import { page } from './page.mjs';
 import { breakpoints, recorder } from './recorder.mjs';
@@ -66,9 +68,10 @@ export function exitOf(code, signal) {
 export async function start(
   profile,
   args = commandLine(profile),
-  executable = chromium.executablePath()
+  executable = chromium.executablePath(),
+  env = inherited
 ) {
-  const child = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(executable, args, { env, stdio: ['ignore', 'ignore', 'pipe'] });
   const stderr = lines(child.stderr);
   const drained = new Promise((resolve) => child.stderr.once('close', resolve));
   const exited = new Promise((resolve) => {
@@ -89,6 +92,11 @@ export async function start(
     void exited.then((reason) => reject(new Error(`${reason}\n${stderr.tail(KEPT).join('\n')}`)));
   });
   return { child, url, exited, stderr };
+}
+
+export function died(child) {
+  if (child.signalCode) return child.signalCode !== 'SIGKILL';
+  return (child.exitCode ?? 0) !== 0;
 }
 
 export async function stop(cdp, child) {
@@ -121,10 +129,22 @@ export async function launch({
   const shared = extensions.length > 0;
   const profile = await mkdtemp(join(tmpdir(), 'slicc-harness-'));
   const loaded = [...found.values()].map((root) => root.slice(0, -1));
-  const { child, url, exited, stderr } = await start(profile, commandLine(profile, loaded, args));
+  const dumps = await crashpad();
+  const { child, url, exited, stderr } = await start(
+    profile,
+    commandLine(profile, loaded, args),
+    chromium.executablePath(),
+    dumps.env
+  );
   const cdp = await connect(url, {
     exited,
     tail: () => stderr.tail().map((line) => `stderr: ${line}`),
+  });
+  let crashes = 0;
+  let open = 0;
+  let closed = false;
+  cdp.on(({ method }) => {
+    if (method === CRASHED || method === 'Target.targetCrashed') crashes += 1;
   });
   const record = recorder(cdp, files, { coverage, exits: await breakpoints(server, exits) });
   const remote = await cdn(cdp, intercept);
@@ -146,9 +166,12 @@ export async function launch({
     await Promise.all(closing.map((sent) => sent.catch(ignore)));
   }
 
-  async function finish(pages, browserContextId, dir, before, mark) {
+  async function finish(pages, browserContextId, dir, before, mark, seen) {
     const log = stderr.since(mark).map((line) => `${line}\n`);
     await writeFile(new URL('chrome-stderr.log', dir), log.join(''));
+    if (crashes > seen || died(child)) await dumps.keep(dir).catch(ignore);
+    open -= 1;
+    if (closed && open === 0) await dumps.remove();
     await bounded(Promise.all(pages.map((opened) => opened.probed())), 'probes', 30000);
     const shots = pages.map((opened, i) =>
       opened.screenshot(new URL(`tab-${i + 1}.png`, dir)).catch(ignore)
@@ -181,7 +204,9 @@ export async function launch({
       server.overridden.clear();
       const pages = [];
       const mark = stderr.total;
-      t.after(() => finish(pages, browserContextId, dir, before, mark));
+      const seen = crashes;
+      open += 1;
+      t.after(() => finish(pages, browserContextId, dir, before, mark, seen));
       const tab = async () => {
         const opened = page(cdp, await record.open(browserContextId), server, timeout, {
           stallAfter,
@@ -198,6 +223,8 @@ export async function launch({
     async close() {
       await stop(cdp, child);
       await rm(profile, { recursive: true, force: true });
+      closed = true;
+      if (open === 0) await dumps.remove();
       await server.close();
     },
   };
