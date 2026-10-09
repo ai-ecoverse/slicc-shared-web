@@ -41,6 +41,9 @@ export function table(runs) {
       self.set(frame, (self.get(frame) ?? 0) + micros);
     }
   }
+  if (profiles === 0) {
+    return '### Hotspots: CPU profiling is off. Set SLICC_PROFILE=1 or pass `profile: true` to `launch()` to record profiles.\n';
+  }
   const top = [...self].sort((a, b) => b[1] - a[1]).slice(0, 15);
   const rows = top.map(([frame, micros]) => `| ${(micros / 1000).toFixed(2)} ms | \`${frame}\` |`);
   return [

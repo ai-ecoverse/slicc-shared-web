@@ -8,6 +8,7 @@ import { bounded, ignore, raw, samples, sleep, TIMED_OUT } from './util.mjs';
 
 const profiled = new Set(['page', 'worker', 'service_worker', 'shared_worker']);
 const nested = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+const sampling = [['Profiler.setSamplingInterval', { interval: 100 }], ['Profiler.start']];
 const unload = "addEventListener('beforeunload', () => { debugger; })";
 
 function pathOf(url) {
@@ -77,16 +78,26 @@ function frames(params) {
     .join(' < ');
 }
 
-async function sample(cdp, pauses, [sessionId, target], dir, tag) {
+async function sample(cdp, pauses, [sessionId, target], dir, tag, profiling) {
   const send = (method) => cdp.send(method, {}, sessionId, 8000);
-  const stopped = await send('Profiler.stop').catch((error) => ({ error }));
-  send('Profiler.start').catch(ignore);
   const pause = pauses.get(sessionId);
   const state = pause ? `paused (${pause.reason})` : 'running';
+  if (!profiling) return `${label(target)}: ${state}`;
+  const stopped = await send('Profiler.stop').catch((error) => ({ error }));
+  send('Profiler.start').catch(ignore);
   if (!stopped.profile) return `${label(target)}: ${state}, no profile (${stopped.error?.message})`;
   const name = `${tag}-${label(target)}-${sessionId.slice(0, 6)}.cpuprofile`;
   await writeFile(new URL(name, dir), JSON.stringify(stopped.profile)).catch(ignore);
   return `${label(target)}: ${state}, profile ${name}`;
+}
+
+function collect(send, profiling) {
+  const stop = profiling ? send('Profiler.stop') : {};
+  const taken = Promise.all([send('Profiler.takePreciseCoverage'), stop]);
+  return Promise.race([taken, sleep(3000)]).then(
+    (answer) => answer ?? [{}, {}],
+    () => [{}, {}]
+  );
 }
 
 function held(pauses) {
@@ -120,7 +131,7 @@ function contextOf(sessions, parents, sessionId) {
   return undefined;
 }
 
-export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = {}) {
+export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), profiling } = {}) {
   const sessions = new Map();
   const pauses = new Map();
   const parents = new Map();
@@ -132,14 +143,11 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
   async function dump(sessionId, target, restart) {
     const current = run;
     const send = (method) => cdp.send(method, {}, sessionId);
-    const taken = Promise.all([send('Profiler.takePreciseCoverage'), send('Profiler.stop')]);
-    const [{ result }, { profile }] = await Promise.race([taken, sleep(3000)]).then(
-      (answer) => answer ?? [{}, {}],
-      () => [{}, {}]
-    );
+    const [{ result }, { profile }] = await collect(send, profiling);
     if (!(result && current)) return;
-    if (restart) send('Profiler.start').catch(ignore);
     current.scripts.push(...result.filter(ours));
+    if (!profile) return;
+    if (restart) send('Profiler.start').catch(ignore);
     current.profiles += 1;
     selfTimes(profile, server, current.self);
     const name = `${String(current.profiles).padStart(3, '0')}-${label(target)}.cpuprofile`;
@@ -168,11 +176,10 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
       list.push(
         ['Runtime.enable'],
         ['Profiler.enable'],
-        ['Profiler.setSamplingInterval', { interval: 100 }],
         ['Profiler.startPreciseCoverage', { callCount: true, detailed: true }],
-        ['Profiler.start'],
         ['Target.setAutoAttach', nested]
       );
+      if (profiling) list.push(...sampling);
     }
     const lines = type === 'worker' ? exits.get(pathOf(url)) : undefined;
     if (lines) {
@@ -230,7 +237,8 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
     const current = [...sessions].filter(
       ([sessionId]) => contextOf(sessions, parents, sessionId) === run?.context
     );
-    const sampled = () => Promise.all(current.map((entry) => sample(cdp, pauses, entry, dir, tag)));
+    const sampled = () =>
+      Promise.all(current.map((entry) => sample(cdp, pauses, entry, dir, tag, profiling)));
     const [lines, traced] = first ? await trace(cdp, dir, tag, sampled) : [await sampled(), []];
     const all = [...pending, ...lines, ...traced, ...held(pauses)];
     for (const line of all) run?.console.push(`${tag}: ${line}`);
