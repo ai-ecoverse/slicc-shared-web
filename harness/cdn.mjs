@@ -21,18 +21,46 @@ export async function fetched(url, { attempts = 3, ms = DOWNLOAD_TIMEOUT, fetche
   }
 }
 
-export async function download(url) {
-  const { host, pathname, search } = new URL(url);
-  const query = search ? encodeURIComponent(search) : '';
-  const file = new URL(`./${host}${pathname}${query}`.replaceAll('%', '%25'), store);
-  const hit = await readFile(file).catch(ignore);
-  if (hit) return hit;
-  const body = await fetched(url);
+const fresh = new Map();
+
+export function mutable(url) {
+  const { hostname, pathname } = new URL(url);
+  return hostname.startsWith('registry.') && !/\/-\/[^/]+\.tgz$/.test(pathname);
+}
+
+async function save(file, body) {
   await mkdir(dirname(fileURLToPath(file)), { recursive: true });
   const partial = new URL(`${file.href}.${process.pid}`);
   await writeFile(partial, body);
   await rename(partial, file);
   return body;
+}
+
+async function refresh(url, file) {
+  const body = await fetched(url).catch(async (error) => {
+    const stale = await readFile(file).catch(ignore);
+    if (!stale) throw error;
+    console.warn(`harness: serving cached ${url}: ${error.message}`);
+    return null;
+  });
+  return body ? save(file, body) : readFile(file);
+}
+
+export async function download(url) {
+  const { host, pathname, search } = new URL(url);
+  const query = search ? encodeURIComponent(search) : '';
+  const file = new URL(`./${host}${pathname}${query}`.replaceAll('%', '%25'), store);
+  if (mutable(url)) {
+    if (!fresh.has(url)) {
+      const pending = refresh(url, file);
+      fresh.set(url, pending);
+      pending.catch(() => fresh.delete(url));
+    }
+    return fresh.get(url);
+  }
+  const hit = await readFile(file).catch(ignore);
+  if (hit) return hit;
+  return save(file, await fetched(url));
 }
 
 export async function cdn(cdp, remotes) {
