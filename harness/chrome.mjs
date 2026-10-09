@@ -9,7 +9,7 @@ import { extensionSource, unpacked } from './extensions.mjs';
 import { page } from './page.mjs';
 import { breakpoints, recorder } from './recorder.mjs';
 import { serve } from './server.mjs';
-import { artifacts, bounded, ignore, slug, TIMED_OUT } from './util.mjs';
+import { artifacts, bounded, ignore, sleep, slug, TIMED_OUT } from './util.mjs';
 
 export const flags = [
   '--headless',
@@ -70,8 +70,12 @@ export async function start(
 ) {
   const child = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe'] });
   const stderr = lines(child.stderr);
+  const drained = new Promise((resolve) => child.stderr.once('close', resolve));
   const exited = new Promise((resolve) => {
-    child.once('exit', (code, signal) => resolve(exitOf(code, signal)));
+    child.once('exit', (code, signal) => {
+      const reason = exitOf(code, signal);
+      void Promise.race([drained, sleep(1000)]).then(() => resolve(reason));
+    });
   });
   const url = await new Promise((resolve, reject) => {
     child.stderr.on('data', () => {
