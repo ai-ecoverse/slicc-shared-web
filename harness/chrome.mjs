@@ -1,8 +1,10 @@
-import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { env as inherited } from 'node:process';
+import { promisify } from 'node:util';
 import { chromium } from 'playwright-core';
 import { cdn } from './cdn.mjs';
 import { CRASHED, connect } from './cdp.mjs';
@@ -16,6 +18,7 @@ import { artifacts, bounded, ignore, sleep, slug, TIMED_OUT } from './util.mjs';
 export const flags = [
   '--headless',
   '--remote-debugging-port=0',
+  '--remote-debugging-pipe',
   '--no-first-run',
   '--no-default-browser-check',
   '--no-sandbox',
@@ -71,7 +74,10 @@ export async function start(
   executable = chromium.executablePath(),
   env = inherited
 ) {
-  const child = spawn(executable, args, { env, stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(executable, args, {
+    env,
+    stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
+  });
   const stderr = lines(child.stderr);
   const drained = new Promise((resolve) => child.stderr.once('close', resolve));
   const exited = new Promise((resolve) => {
@@ -110,6 +116,73 @@ export async function stop(cdp, child) {
   }
 }
 
+export const PREFIX = 'slicc-harness-';
+export const DAY = 24 * 60 * 60 * 1000;
+export const GRACE = 60 * 1000;
+
+const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const running = new Set();
+
+function reap() {
+  for (const { child, paths } of running) {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    for (const path of paths) rmSync(path, { recursive: true, force: true });
+  }
+  running.clear();
+  unhook();
+}
+
+function reraise(signal) {
+  reap();
+  process.kill(process.pid, signal);
+}
+
+function hook() {
+  process.on('exit', reap);
+  for (const signal of signals) process.on(signal, reraise);
+}
+
+function unhook() {
+  process.off('exit', reap);
+  for (const signal of signals) process.off(signal, reraise);
+}
+
+export function track(child, paths) {
+  const entry = { child, paths };
+  if (running.size === 0) hook();
+  running.add(entry);
+  return () => {
+    running.delete(entry);
+    if (running.size === 0) unhook();
+  };
+}
+
+export async function profilesInUse() {
+  const { stdout } = await promisify(execFile)('ps', ['axww', '-o', 'args='], {
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return new Set([...stdout.matchAll(/--user-data-dir=(\S+)/g)].map(([, path]) => path));
+}
+
+export async function prune(dir = tmpdir(), grace = GRACE) {
+  const used = await profilesInUse().catch(ignore);
+  const names = await readdir(dir).catch(() => []);
+  const now = Date.now();
+  const removing = names
+    .filter((name) => name.startsWith(PREFIX))
+    .map(async (name) => {
+      const path = join(dir, name);
+      const info = await lstat(path).catch(ignore);
+      if (!info?.isDirectory()) return;
+      const age = now - info.mtimeMs;
+      const orphaned = used !== null && age > grace && !used.has(path);
+      if (age > DAY || orphaned) await rm(path, { recursive: true, force: true }).catch(ignore);
+    });
+  await Promise.all(removing);
+}
+
+let pruning = null;
+
 export async function launch({
   roots,
   aliases,
@@ -122,12 +195,14 @@ export async function launch({
   timeout,
   stallAfter,
 } = {}) {
+  pruning ??= prune();
+  await pruning;
   const server = await serve({ roots, aliases, isolated });
   const found = await unpacked(extensions);
   const fromExtension = extensionSource(found);
   const files = { ...server, source: (href) => server.source(href) ?? fromExtension(href) };
   const shared = extensions.length > 0;
-  const profile = await mkdtemp(join(tmpdir(), 'slicc-harness-'));
+  const profile = await mkdtemp(join(tmpdir(), PREFIX));
   const loaded = [...found.values()].map((root) => root.slice(0, -1));
   const dumps = await crashpad();
   const { child, url, exited, stderr } = await start(
@@ -136,6 +211,7 @@ export async function launch({
     chromium.executablePath(),
     dumps.env
   );
+  const untrack = track(child, [profile, dumps.dir]);
   const cdp = await connect(url, {
     exited,
     tail: () => stderr.tail().map((line) => `stderr: ${line}`),
@@ -189,6 +265,7 @@ export async function launch({
   return {
     url: server.url,
     pid: child.pid,
+    profile,
     cdn: remote.state,
     requests: server.requests,
     overrides: server.overrides,
@@ -223,6 +300,7 @@ export async function launch({
     async close() {
       await stop(cdp, child);
       await rm(profile, { recursive: true, force: true });
+      untrack();
       closed = true;
       if (open === 0) await dumps.remove();
       await server.close();
