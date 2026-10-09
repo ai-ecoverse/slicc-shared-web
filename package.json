@@ -36,6 +36,7 @@
     "slicc-diff-cover": "bin/slicc-diff-cover.sh",
     "slicc-lint": "bin/slicc-lint.sh",
     "slicc-lint-comments": "bin/slicc-lint-comments.sh",
+    "slicc-minidump": "bin/slicc-minidump.mjs",
     "slicc-no-unit-tests": "bin/slicc-no-unit-tests.sh"
   },
   "files": [

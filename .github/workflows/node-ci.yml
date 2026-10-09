@@ -53,6 +53,21 @@ jobs:
         if: always()
         run: cat artifacts/hotspots.md >> "$GITHUB_STEP_SUMMARY" || true
 
+      - name: Crash dumps
+        if: always()
+        run: |
+          script=node_modules/.bin/slicc-minidump
+          [ -x "$script" ] || script=bin/slicc-minidump.mjs
+          find artifacts -name '*.dmp' 2>/dev/null | while read -r dump; do
+            report="${dump%.dmp}.txt"
+            node "$script" "$dump" > "$report" 2>&1 || true
+            {
+              printf '### Crash dump %s\n\n~~~\n' "$dump"
+              sed -n '1,/^modules:$/p' "$report" | head -100
+              printf '~~~\n\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
