@@ -15,6 +15,10 @@ const builds = {
     'x86_64-unknown-linux-gnu',
     '0020324c54cc359596e927ee907204f4c8d4da6718765536edcabaa1622122ad',
   ],
+  'linux-x64-musl': [
+    'x86_64-unknown-linux-musl',
+    'bfaf97804965c87155b91765f4042440a38bb002f20a62fc4da9b6b6bcb20faf',
+  ],
   'darwin-arm64': [
     'aarch64-apple-darwin',
     '5fcd4d25a5b0bbdc8faac6f4f81629bc67483c3eb458b86a8304733a7c6a2ca9',
@@ -25,9 +29,14 @@ const builds = {
   ],
 };
 
+function host() {
+  const musl = platform === 'linux' && !process.report.getReport().header.glibcVersionRuntime;
+  return `${platform}-${arch}${musl ? '-musl' : ''}`;
+}
+
 async function stackwalk() {
-  const build = builds[`${platform}-${arch}`];
-  if (!build) throw new Error(`no minidump-stackwalk ${VERSION} build for ${platform}-${arch}`);
+  const build = builds[host()];
+  if (!build) throw new Error(`no minidump-stackwalk ${VERSION} build for ${host()}`);
   const [target, sha256] = build;
   const dir = join(env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'slicc-minidump', VERSION);
   const binary = join(dir, `minidump-stackwalk-${target}`, 'minidump-stackwalk');
@@ -78,7 +87,7 @@ function report(walked, dump) {
     `thread ${crash?.crashing_thread} ${thread?.thread_name ?? ''} (${thread?.frame_count ?? 0} frames):`,
     ...(thread?.frames ?? []).slice(0, FRAMES).map(frame),
     'modules:',
-    ...modules.map(
+    ...(modules ?? []).map(
       ({ base_addr, end_addr, filename, code_id }) =>
         `  ${base_addr}-${end_addr}  ${filename}  ${code_id ?? ''}`
     ),

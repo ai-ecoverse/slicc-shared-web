@@ -141,6 +141,8 @@ export async function launch({
     tail: () => stderr.tail().map((line) => `stderr: ${line}`),
   });
   let crashes = 0;
+  let open = 0;
+  let closed = false;
   cdp.on(({ method }) => {
     if (method === CRASHED || method === 'Target.targetCrashed') crashes += 1;
   });
@@ -168,6 +170,8 @@ export async function launch({
     const log = stderr.since(mark).map((line) => `${line}\n`);
     await writeFile(new URL('chrome-stderr.log', dir), log.join(''));
     if (crashes > seen || died(child)) await dumps.keep(dir).catch(ignore);
+    open -= 1;
+    if (closed && open === 0) await dumps.remove();
     await bounded(Promise.all(pages.map((opened) => opened.probed())), 'probes', 30000);
     const shots = pages.map((opened, i) =>
       opened.screenshot(new URL(`tab-${i + 1}.png`, dir)).catch(ignore)
@@ -201,6 +205,7 @@ export async function launch({
       const pages = [];
       const mark = stderr.total;
       const seen = crashes;
+      open += 1;
       t.after(() => finish(pages, browserContextId, dir, before, mark, seen));
       const tab = async () => {
         const opened = page(cdp, await record.open(browserContextId), server, timeout, {
@@ -218,7 +223,8 @@ export async function launch({
     async close() {
       await stop(cdp, child);
       await rm(profile, { recursive: true, force: true });
-      await dumps.remove();
+      closed = true;
+      if (open === 0) await dumps.remove();
       await server.close();
     },
   };

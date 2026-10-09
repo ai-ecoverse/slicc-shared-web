@@ -43,6 +43,18 @@ test('a killed browser fails every call in seconds', async (t) => {
   assert.ok(Date.now() - started < 5000, `${Date.now() - started} ms`);
 });
 
+test('a browser that segfaults leaves its minidump, even when it closes first', async (t) => {
+  const doomed = await launch({ roots });
+  t.after(() => doomed.close());
+  const page = await doomed.page(t);
+  await page.goto('/');
+  process.kill(doomed.pid, 'SIGSEGV');
+  await assert.rejects(
+    page.until(() => false),
+    /browser exited with SIGSEGV/
+  );
+});
+
 test('the crash is in console.log, and every test keeps the browser stderr', async () => {
   const crashed = new URL('a-crashed-page-fails-its-wait-in-seconds/', artifacts);
   const log = await readFile(new URL('console.log', crashed), 'utf8');
@@ -53,6 +65,15 @@ test('the crash is in console.log, and every test keeps the browser stderr', asy
   ]) {
     await readFile(new URL(`${name}/chrome-stderr.log`, artifacts), 'utf8');
   }
+});
+
+test('a browser crash leaves its minidump', async () => {
+  const died = new URL(
+    'a-browser-that-segfaults-leaves-its-minidump-even-when-it-closes-first/',
+    artifacts
+  );
+  const dumps = (await readdir(died)).filter((file) => file.endsWith('.dmp'));
+  assert.equal(dumps.length, 1, dumps.join());
 });
 
 test('a renderer crash leaves its minidump, and slicc-minidump prints its stack', async () => {
