@@ -52,7 +52,7 @@ export function pipe(input, output) {
 }
 
 export async function connect(url, { exited, tail = () => [] } = {}) {
-  const socket = typeof url === 'string' ? await websocket(url) : url;
+  const socket = typeof url?.listen === 'function' ? url : await websocket(url);
   const pending = new Map();
   const listeners = new Set();
   const targets = new Map();
