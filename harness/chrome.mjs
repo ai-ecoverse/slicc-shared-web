@@ -74,6 +74,7 @@ export async function start(
 ) {
   const child = spawn(executable, args, {
     env,
+    detached: true,
     stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
   });
   const stderr = lines(child.stderr);
@@ -111,7 +112,7 @@ export async function stop(cdp, child, waits = WAITS) {
   await bounded(cdp.send('Browser.close').catch(ignore), 'Browser.close', waits.close);
   cdp.close();
   if (gone() || (await bounded(exited, 'exit', waits.exit)) !== TIMED_OUT || gone()) return;
-  child.kill('SIGKILL');
+  kill(child);
   if (gone() || (await bounded(exited, 'exit after SIGKILL', waits.kill)) !== TIMED_OUT) return;
   if (!gone()) console.warn(`chrome: pid ${child.pid} still runs after SIGKILL, moving on`);
 }
@@ -123,15 +124,27 @@ export const GRACE = 60 * 1000;
 const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const running = new Set();
 
-function kill(child) {
+export function kill(child) {
+  if (child.pid > 0 && child.spawnargs?.length) {
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+    } catch {}
+  }
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
 }
 
-function reap() {
-  for (const { children, paths } of running) {
-    for (const child of children) kill(child);
+function remove(entries) {
+  for (const { paths } of entries) {
     for (const path of paths) rmSync(path, { recursive: true, force: true });
   }
+}
+
+function reap() {
+  const entries = [...running];
+  for (const { children } of entries) children.forEach(kill);
+  remove(entries);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+  remove(entries);
   running.clear();
   unhook();
 }
@@ -152,7 +165,8 @@ function unhook() {
 }
 
 export function watchdog(pid) {
-  const dog = spawn('sh', ['-c', 'read -r _; kill -9 "$0" 2>/dev/null', String(pid)], {
+  const dog = spawn('sh', ['-c', 'read -r _; kill -9 -"$0" "$0" 2>/dev/null', String(pid)], {
+    detached: true,
     stdio: ['pipe', 'ignore', 'ignore'],
   });
   dog.on('error', ignore);

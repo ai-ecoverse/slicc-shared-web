@@ -99,8 +99,8 @@ Why it works the way it does:
 ## Cleanup
 
 `close()` stops Chrome and removes its profile. It asks Chrome to close, waits up to 10 s for the exit, sends `SIGKILL`, waits up to 5 s more and then moves on with a warning, so a browser that ignores `Browser.close` or a missed exit never hangs teardown. A test process that ends without `close()` still leaves nothing running:
-- on `exit` and on `SIGINT`, `SIGTERM` or `SIGHUP`, the harness kills every browser it started in that process with `SIGKILL` and removes its profile and crash dump directory, then re-raises the signal so the process ends the way it would have;
-- when the test process dies of `SIGKILL`, no handler runs. A watchdog, a `sh` that reads a pipe from the test process, then gets end of file and kills Chrome with `SIGKILL` at once. Chrome also shuts itself down when the CDP pipe closes, but that can take seconds. Only the profile stays behind;
+- on `exit` and on `SIGINT`, `SIGTERM` or `SIGHUP`, the harness kills every browser it started in that process, with all its helper processes (Chrome runs in its own process group), with `SIGKILL` and removes its profile and crash dump directory, then re-raises the signal so the process ends the way it would have;
+- when the test process dies of `SIGKILL`, no handler runs. A watchdog, a `sh` in its own process group that reads a pipe from the test process, then gets end of file and kills Chrome's process group with `SIGKILL` at once. Chrome also shuts itself down when the CDP pipe closes, but that can take seconds. Only the profile stays behind;
 - the first `launch()` in a process removes every `slicc-harness-*` directory in `$TMPDIR` that is older than a day, or older than a minute and no running process uses as its `--user-data-dir`. It never kills a process.
 
 ## Crash dumps
