@@ -86,8 +86,8 @@ test('SIGKILL before close() stops chrome, and the next launch removes its profi
   assert.ok(!existsSync(profile), 'prune removes the profile');
 });
 
-test('prune keeps a profile a running chrome uses', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'slicc-exit-'));
+test('prune keeps a profile a running chrome uses, even in a path with spaces', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'slicc exit '));
   dirs.push(dir);
   const profile = await mkdtemp(join(dir, 'slicc-harness-'));
   const holder = spawn(process.execPath, [

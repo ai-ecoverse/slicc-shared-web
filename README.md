@@ -100,7 +100,7 @@ Why it works the way it does:
 
 `close()` stops Chrome and removes its profile. A test process that ends without `close()` still leaves nothing running:
 - on `exit` and on `SIGINT`, `SIGTERM` or `SIGHUP`, the harness kills every browser it started in that process with `SIGKILL` and removes its profile and crash dump directory, then re-raises the signal so the process ends the way it would have;
-- Chrome runs with `--remote-debugging-pipe` next to the port, holding a pipe to the test process. When the test process dies, even of `SIGKILL`, the pipe closes and Chrome exits on its own. Only its profile stays behind;
+- when the test process dies of `SIGKILL`, no handler runs. A watchdog, a `sh` that reads a pipe from the test process, then gets end of file and kills Chrome with `SIGKILL` at once. Chrome also runs with `--remote-debugging-pipe` next to the port, so it shuts itself down when that pipe closes, but its shutdown can take seconds. Only the profile stays behind;
 - the first `launch()` in a process removes every `slicc-harness-*` directory in `$TMPDIR` that is older than a day, or older than a minute and no running process uses as its `--user-data-dir`. It never kills a process.
 
 ## Crash dumps

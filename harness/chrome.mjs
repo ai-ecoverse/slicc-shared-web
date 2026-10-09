@@ -123,9 +123,13 @@ export const GRACE = 60 * 1000;
 const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const running = new Set();
 
+function kill(child) {
+  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+}
+
 function reap() {
-  for (const { child, paths } of running) {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  for (const { children, paths } of running) {
+    for (const child of children) kill(child);
     for (const path of paths) rmSync(path, { recursive: true, force: true });
   }
   running.clear();
@@ -147,25 +151,37 @@ function unhook() {
   for (const signal of signals) process.off(signal, reraise);
 }
 
+export function watchdog(pid) {
+  const dog = spawn('sh', ['-c', 'read -r _; kill -9 "$0" 2>/dev/null', String(pid)], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
+  dog.on('error', ignore);
+  dog.stdin.on('error', ignore);
+  return dog;
+}
+
 export function track(child, paths) {
-  const entry = { child, paths };
+  const dog = watchdog(child.pid);
+  const entry = { children: [child, dog], paths };
   if (running.size === 0) hook();
   running.add(entry);
   return () => {
     running.delete(entry);
     if (running.size === 0) unhook();
+    kill(dog);
   };
 }
 
-export async function profilesInUse() {
+export async function commandLines() {
   const { stdout } = await promisify(execFile)('ps', ['axww', '-o', 'args='], {
     maxBuffer: 64 * 1024 * 1024,
   });
-  return new Set([...stdout.matchAll(/--user-data-dir=(\S+)/g)].map(([, path]) => path));
+  return stdout.split('\n').map((line) => `${line} `);
 }
 
 export async function prune(dir = tmpdir(), grace = GRACE) {
-  const used = await profilesInUse().catch(ignore);
+  const lines = await commandLines().catch(ignore);
+  const used = (path) => lines.some((line) => line.includes(`--user-data-dir=${path} `));
   const names = await readdir(dir).catch(() => []);
   const now = Date.now();
   const removing = names
@@ -175,7 +191,7 @@ export async function prune(dir = tmpdir(), grace = GRACE) {
       const info = await lstat(path).catch(ignore);
       if (!info?.isDirectory()) return;
       const age = now - info.mtimeMs;
-      const orphaned = used !== null && age > grace && !used.has(path);
+      const orphaned = lines !== null && age > grace && !used(path);
       if (age > DAY || orphaned) await rm(path, { recursive: true, force: true }).catch(ignore);
     });
   await Promise.all(removing);
