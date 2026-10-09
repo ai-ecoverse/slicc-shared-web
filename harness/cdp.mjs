@@ -17,12 +17,42 @@ function grace(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms, 'socket closed').unref());
 }
 
-export async function connect(url, { exited, tail = () => [] } = {}) {
+async function websocket(url) {
   const socket = new WebSocket(url);
   await new Promise((resolve, reject) => {
     socket.onopen = resolve;
     socket.onerror = reject;
   });
+  return {
+    send: (text) => socket.send(text),
+    close: () => socket.close(),
+    listen(message, closed) {
+      socket.onmessage = ({ data }) => message(data);
+      socket.onclose = closed;
+    },
+  };
+}
+
+export function pipe(input, output) {
+  input.on('error', () => null);
+  return {
+    send: (text) => input.write(`${text}\0`),
+    close: () => input.end(),
+    listen(message, closed) {
+      let partial = '';
+      output.setEncoding('utf8');
+      output.on('data', (chunk) => {
+        const parts = `${partial}${chunk}`.split('\0');
+        partial = parts.pop();
+        for (const part of parts) message(part);
+      });
+      output.once('close', closed);
+    },
+  };
+}
+
+export async function connect(url, { exited, tail = () => [] } = {}) {
+  const socket = typeof url === 'string' ? await websocket(url) : url;
   const pending = new Map();
   const listeners = new Set();
   const targets = new Map();
@@ -79,16 +109,18 @@ export async function connect(url, { exited, tail = () => [] } = {}) {
     gone = reason;
     drop(() => true, told(reason), fatal);
   };
-  socket.onmessage = ({ data }) => {
-    const message = JSON.parse(data);
-    track(message);
-    const call = pending.get(message.id);
-    pending.delete(message.id);
-    if (!call) notify(message);
-    else if (message.error) call.reject(new Error(`${call.method}: ${message.error.message}`));
-    else call.resolve(message.result);
-  };
-  socket.onclose = async () => die(await Promise.race([exited ?? 'socket closed', grace(2000)]));
+  socket.listen(
+    (data) => {
+      const message = JSON.parse(data);
+      track(message);
+      const call = pending.get(message.id);
+      pending.delete(message.id);
+      if (!call) notify(message);
+      else if (message.error) call.reject(new Error(`${call.method}: ${message.error.message}`));
+      else call.resolve(message.result);
+    },
+    async () => die(await Promise.race([exited ?? 'socket closed', grace(2000)]))
+  );
   void exited?.then(die);
   return {
     send: (method, params = {}, sessionId, ms = SEND_TIMEOUT) =>

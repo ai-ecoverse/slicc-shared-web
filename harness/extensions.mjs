@@ -26,3 +26,10 @@ export function extensionSource(found) {
     return root ? join(root, normalize(decodeURIComponent(pathname))) : null;
   };
 }
+
+export async function install(cdp, found) {
+  for (const [expected, root] of [...found]) {
+    const { id } = await cdp.send('Extensions.loadUnpacked', { path: root.slice(0, -1) });
+    if (id !== expected) found.set(id, root);
+  }
+}

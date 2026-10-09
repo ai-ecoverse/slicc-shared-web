@@ -7,9 +7,9 @@ import { env as inherited } from 'node:process';
 import { promisify } from 'node:util';
 import { chromium } from 'playwright-core';
 import { cdn } from './cdn.mjs';
-import { CRASHED, connect } from './cdp.mjs';
+import { CRASHED, connect, pipe } from './cdp.mjs';
 import { crashpad } from './dumps.mjs';
-import { extensionSource, unpacked } from './extensions.mjs';
+import { extensionSource, install, unpacked } from './extensions.mjs';
 import { page } from './page.mjs';
 import { breakpoints, recorder } from './recorder.mjs';
 import { serve } from './server.mjs';
@@ -35,9 +35,7 @@ export const flags = [
 export function commandLine(profile, extensions = [], extra = []) {
   const loaded = extensions.length > 0;
   const base = loaded ? flags.filter((flag) => flag !== '--disable-extensions') : flags;
-  const load = loaded
-    ? [`--disable-extensions-except=${extensions}`, `--load-extension=${extensions}`]
-    : [];
+  const load = loaded ? ['--enable-unsafe-extension-debugging'] : [];
   return [...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
 }
 
@@ -105,15 +103,17 @@ export function died(child) {
   return (child.exitCode ?? 0) !== 0;
 }
 
-export async function stop(cdp, child) {
+export const WAITS = { close: 10000, exit: 10000, kill: 5000 };
+
+export async function stop(cdp, child, waits = WAITS) {
+  const gone = () => child.exitCode !== null || child.signalCode !== null;
   const exited = new Promise((resolve) => child.once('exit', resolve));
-  await bounded(cdp.send('Browser.close').catch(ignore), 'Browser.close');
+  await bounded(cdp.send('Browser.close').catch(ignore), 'Browser.close', waits.close);
   cdp.close();
-  const running = child.exitCode === null && child.signalCode === null;
-  if (running && (await bounded(exited, 'exit')) === TIMED_OUT) {
-    child.kill('SIGKILL');
-    await exited;
-  }
+  if (gone() || (await bounded(exited, 'exit', waits.exit)) !== TIMED_OUT || gone()) return;
+  child.kill('SIGKILL');
+  if (gone() || (await bounded(exited, 'exit after SIGKILL', waits.kill)) !== TIMED_OUT) return;
+  if (!gone()) console.warn(`chrome: pid ${child.pid} still runs after SIGKILL, moving on`);
 }
 
 export const PREFIX = 'slicc-harness-';
@@ -221,14 +221,14 @@ export async function launch({
   const profile = await mkdtemp(join(tmpdir(), PREFIX));
   const loaded = [...found.values()].map((root) => root.slice(0, -1));
   const dumps = await crashpad();
-  const { child, url, exited, stderr } = await start(
+  const { child, exited, stderr } = await start(
     profile,
     commandLine(profile, loaded, args),
     chromium.executablePath(),
     dumps.env
   );
   const untrack = track(child, [profile, dumps.dir]);
-  const cdp = await connect(url, {
+  const cdp = await connect(pipe(child.stdio[3], child.stdio[4]), {
     exited,
     tail: () => stderr.tail().map((line) => `stderr: ${line}`),
   });
@@ -246,6 +246,7 @@ export async function launch({
     waitForDebuggerOnStart: true,
     flatten: true,
   });
+  await install(cdp, found);
 
   async function tabs() {
     const { targetInfos } = await cdp.send('Target.getTargets');

@@ -78,6 +78,10 @@ export async function serve({
     locate,
     source: (href) =>
       href.startsWith(url) ? lookup(decodeURIComponent(new URL(href).pathname)) : null,
-    close: () => new Promise((done) => server.close(done)),
+    close: () =>
+      new Promise((done) => {
+        server.close(done);
+        server.closeAllConnections();
+      }),
   };
 }
