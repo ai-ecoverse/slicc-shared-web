@@ -31,7 +31,7 @@ The hooks expect two scripts in each repo: `test:unit`, which writes `coverage/u
 
 ## Integration-test harness
 
-`harness/` drives playwright-core's Chromium over raw CDP, as its only client, from `node --test`. Every page, service worker, shared worker and dedicated worker, nested ones included, starts paused, gets coverage and the CPU profiler switched on in the same tick, and only then runs. Each test gets its own browser context and leaves `artifacts/<suite>/<test>/` behind: one CPU profile per target and snapshot, a screenshot per tab and a `console.log` of every target. The global teardown merges the raw coverage into `coverage/` (console table, lcov, V8 HTML) and writes `artifacts/hotspots.md`, the 15 frames with the most self time in the repo's own scripts.
+`harness/` drives playwright-core's Chromium over raw CDP on `--remote-debugging-pipe`, as its only client, from `node --test`. Every page, service worker, shared worker and dedicated worker, nested ones included, starts paused, gets coverage and the CPU profiler switched on in the same tick, and only then runs. Each test gets its own browser context and leaves `artifacts/<suite>/<test>/` behind: one CPU profile per target and snapshot, a screenshot per tab and a `console.log` of every target. Lines logged before the first test, such as an extension service worker's at startup, go into the first test's `console.log`. The global teardown merges the raw coverage into `coverage/` (console table, lcov, V8 HTML) and writes `artifacts/hotspots.md`, the 15 frames with the most self time in the repo's own scripts.
 
 `playwright-core` and `monocart-coverage-reports` are peer dependencies; pin both in the repo's `devDependencies`. A repo describes what to serve and launches the browser once per test file:
 
@@ -60,7 +60,7 @@ test('boots', async (t) => {
 | `coverage` | URL prefixes whose `.js`/`.mjs` scripts count for coverage. `node_modules/` never does. A `.map` next to a file is used | `['/']` |
 | `exits` | `{ urlPath: [regex, ...] }`: a breakpoint on the first line matching each pattern in that worker script, where the harness takes the worker's coverage and profile before it closes itself | none |
 | `intercept` | Remote URL prefixes answered from a disk cache in `node_modules/.cache/`. Registry documents (anything on a `registry.*` host but a `/-/….tgz` tarball: packuments, abbreviated or full, and dist-tags) are fetched fresh once per test process and only served from the disk cache when the registry can't be reached (a `4xx` is passed on) | none |
-| `extensions` | Unpacked extension directories to load. Their scripts are covered and profiled like the repo's own, and tests then run in the default browser context, closing their tabs when they end, because Chrome does not run extensions in the per-test contexts | none |
+| `extensions` | Unpacked extension directories to load. They are loaded with `Extensions.loadUnpacked` (behind `--enable-unsafe-extension-debugging`) once the harness is attached, so their service workers start paused like every other target. Their scripts are covered and profiled like the repo's own, and tests then run in the default browser context, closing their tabs when they end, because Chrome does not run extensions in the per-test contexts | none |
 | `args` | Extra Chromium flags, such as `--host-resolver-rules` or `--ignore-certificate-errors` | none |
 | `timeout` | How long `page.until` polls and `page.evaluate` waits, in ms | `30000` |
 | `stallAfter` | How long one evaluation may run before the harness probes the test's targets, in ms | `30000` |
@@ -98,9 +98,9 @@ Why it works the way it does:
 
 ## Cleanup
 
-`close()` stops Chrome and removes its profile. A test process that ends without `close()` still leaves nothing running:
+`close()` stops Chrome and removes its profile. It asks Chrome to close, waits up to 10 s for the exit, sends `SIGKILL`, waits up to 5 s more and then moves on with a warning, so a browser that ignores `Browser.close` or a missed exit never hangs teardown. A test process that ends without `close()` still leaves nothing running:
 - on `exit` and on `SIGINT`, `SIGTERM` or `SIGHUP`, the harness kills every browser it started in that process with `SIGKILL` and removes its profile and crash dump directory, then re-raises the signal so the process ends the way it would have;
-- when the test process dies of `SIGKILL`, no handler runs. A watchdog, a `sh` that reads a pipe from the test process, then gets end of file and kills Chrome with `SIGKILL` at once. Chrome also runs with `--remote-debugging-pipe` next to the port, so it shuts itself down when that pipe closes, but its shutdown can take seconds. Only the profile stays behind;
+- when the test process dies of `SIGKILL`, no handler runs. A watchdog, a `sh` that reads a pipe from the test process, then gets end of file and kills Chrome with `SIGKILL` at once. Chrome also shuts itself down when the CDP pipe closes, but that can take seconds. Only the profile stays behind;
 - the first `launch()` in a process removes every `slicc-harness-*` directory in `$TMPDIR` that is older than a day, or older than a minute and no running process uses as its `--user-data-dir`. It never kills a process.
 
 ## Crash dumps

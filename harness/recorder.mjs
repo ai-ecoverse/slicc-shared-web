@@ -125,6 +125,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
   const pauses = new Map();
   const parents = new Map();
   const tabs = new Map();
+  const early = [];
   const ours = covered(server, coverage);
   let run = null;
 
@@ -204,8 +205,8 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
 
   function log(sessionId, line) {
     const target = sessions.get(sessionId);
-    if (!run || target?.browserContextId !== run.context) return;
-    run.console.push(`${label(target)}: ${line}`);
+    const into = run ? target?.browserContextId === run.context && run.console : target && early;
+    if (into) into.push(`${label(target)}: ${line}`);
   }
 
   async function capture(sessionId, target) {
@@ -274,7 +275,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
   }
 
   function begin(context, dir, name) {
-    run = { context, dir, name, scripts: [], console: [], profiles: 0, self: {} };
+    run = { context, dir, name, scripts: [], console: early.splice(0), profiles: 0, self: {} };
   }
 
   async function end() {

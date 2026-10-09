@@ -19,7 +19,11 @@ export function sleep(ms) {
 }
 
 export async function bounded(promise, label, ms = 10000) {
-  const result = await Promise.race([promise, sleep(ms).then(() => TIMED_OUT)]);
+  let timer;
+  const expired = new Promise((resolve) => {
+    timer = setTimeout(resolve, ms, TIMED_OUT);
+  });
+  const result = await Promise.race([promise, expired]).finally(() => clearTimeout(timer));
   if (result === TIMED_OUT) console.warn(`chrome: ${label} took over ${ms} ms, moving on`);
   return result;
 }
