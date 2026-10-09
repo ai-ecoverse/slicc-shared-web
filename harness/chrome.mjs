@@ -224,6 +224,7 @@ export async function launch({
   args = [],
   timeout,
   stallAfter,
+  profile = inherited.SLICC_PROFILE === '1',
 } = {}) {
   pruning ??= prune();
   await pruning;
@@ -232,16 +233,16 @@ export async function launch({
   const fromExtension = extensionSource(found);
   const files = { ...server, source: (href) => server.source(href) ?? fromExtension(href) };
   const shared = extensions.length > 0;
-  const profile = await mkdtemp(join(tmpdir(), PREFIX));
+  const userData = await mkdtemp(join(tmpdir(), PREFIX));
   const loaded = [...found.values()].map((root) => root.slice(0, -1));
   const dumps = await crashpad();
   const { child, exited, stderr } = await start(
-    profile,
-    commandLine(profile, loaded, args),
+    userData,
+    commandLine(userData, loaded, args),
     chromium.executablePath(),
     dumps.env
   );
-  const untrack = track(child, [profile, dumps.dir]);
+  const untrack = track(child, [userData, dumps.dir]);
   const cdp = await connect(pipe(child.stdio[3], child.stdio[4]), {
     exited,
     tail: () => stderr.tail().map((line) => `stderr: ${line}`),
@@ -252,7 +253,11 @@ export async function launch({
   cdp.on(({ method }) => {
     if (method === CRASHED || method === 'Target.targetCrashed') crashes += 1;
   });
-  const record = recorder(cdp, files, { coverage, exits: await breakpoints(server, exits) });
+  const record = recorder(cdp, files, {
+    coverage,
+    exits: await breakpoints(server, exits),
+    profiling: profile,
+  });
   const remote = await cdn(cdp, intercept);
   await cdp.send('Target.setDiscoverTargets', { discover: true });
   await cdp.send('Target.setAutoAttach', {
@@ -296,7 +301,7 @@ export async function launch({
   return {
     url: server.url,
     pid: child.pid,
-    profile,
+    profile: userData,
     cdn: remote.state,
     requests: server.requests,
     overrides: server.overrides,
@@ -330,7 +335,7 @@ export async function launch({
     },
     async close() {
       await stop(cdp, child);
-      await rm(profile, { recursive: true, force: true });
+      await rm(userData, { recursive: true, force: true });
       untrack();
       closed = true;
       if (open === 0) await dumps.remove();
