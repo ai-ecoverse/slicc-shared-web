@@ -103,6 +103,7 @@ export function page(
   const flying = flights();
   const dispose = cdp.on((message) => {
     const { method, params, sessionId: from } = message;
+    if (method === 'Inspector.workerScriptLoaded') flying.loaded(cdp.target(from)?.targetId);
     if (from !== sessionId) return;
     flying.watch(message);
     if (method === 'Runtime.exceptionThrown') {
@@ -156,6 +157,7 @@ export function page(
         last = await run(fn, args, left);
         if (last) return last;
       } catch (error) {
+        if (error.fatal) throw error;
         last = error.message;
       }
       await sleep(25);
@@ -183,7 +185,7 @@ export function page(
         await until(fresh);
         return;
       } catch (error) {
-        if (attempt === 1) throw error;
+        if (error.fatal || attempt === 1) throw error;
       }
     }
   }
@@ -192,6 +194,7 @@ export function page(
     errors,
     responses,
     dispose,
+    send,
     evaluate,
     until,
     within,
