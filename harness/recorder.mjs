@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, relative } from 'node:path';
 import { cwd } from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { CRASHED } from './cdp.mjs';
 import { trace } from './trace.mjs';
 import { bounded, ignore, raw, samples, sleep, TIMED_OUT } from './util.mjs';
 
@@ -257,6 +258,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map() } = 
       await paused(sessionId);
     }
     if (method === 'Debugger.resumed') pauses.delete(sessionId);
+    if (method === CRASHED) log(sessionId, params.reason);
   });
 
   async function open(browserContextId) {

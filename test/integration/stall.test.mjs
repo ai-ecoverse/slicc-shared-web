@@ -34,6 +34,22 @@ test('a busy page is probed', async (t) => {
   assert.equal(await page.evaluate(() => 'quick'), 'quick');
 });
 
+test('a page whose workers booted is probed', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  assert.deepEqual(await page.evaluate(() => window.fixture.worker()), {
+    outer: 46368,
+    inner: 46368,
+  });
+  assert.equal(await page.evaluate(() => window.fixture.shared()), 6765);
+  const busy = () => {
+    const end = Date.now() + 1500;
+    while (Date.now() < end);
+    return 'done';
+  };
+  assert.equal(await page.evaluate(busy), 'done');
+});
+
 test('a debugger statement is resumed', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
@@ -94,4 +110,10 @@ test('the probe names a navigation that is still waiting for its answer', async 
     /^stall-1: pending GET http:\/\/127\.0\.0\.1:\d+\/slow \(Document\) for /m,
     log
   );
+});
+
+test('the probe does not list worker scripts that loaded', async () => {
+  const log = await logOf('a-page-whose-workers-booted-is-probed');
+  assert.match(log, /^stall-1: page: running/m, log);
+  assert.doesNotMatch(log, /pending GET .*\/(worker|nested|shared)\.js/, log);
 });

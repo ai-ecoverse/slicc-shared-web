@@ -36,30 +36,63 @@ export function commandLine(profile, extensions = [], extra = []) {
   return [...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
 }
 
+export const KEPT = 200;
+
+export function lines(stream, kept = KEPT) {
+  const last = [];
+  let partial = '';
+  let total = 0;
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk) => {
+    const split = `${partial}${chunk}`.split('\n');
+    partial = split.pop();
+    total += split.length;
+    last.push(...split);
+    last.splice(0, last.length - kept);
+  });
+  return {
+    get total() {
+      return total;
+    },
+    since: (mark) => last.slice(Math.max(0, last.length - (total - mark))),
+    tail: (n = 5) => last.slice(-n),
+  };
+}
+
+export function exitOf(code, signal) {
+  return signal ? `browser exited with ${signal}` : `browser exited with code ${code}`;
+}
+
 export async function start(
   profile,
   args = commandLine(profile),
   executable = chromium.executablePath()
 ) {
   const child = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-  let log = '';
+  const stderr = lines(child.stderr);
+  const exited = new Promise((resolve) => {
+    child.once('exit', (code, signal) => resolve(exitOf(code, signal)));
+  });
   const url = await new Promise((resolve, reject) => {
-    child.stderr.on('data', (chunk) => {
-      log += chunk;
-      const match = log.match(/DevTools listening on (ws:\/\/\S+)/);
+    child.stderr.on('data', () => {
+      const match = stderr
+        .tail(KEPT)
+        .join('\n')
+        .match(/DevTools listening on (ws:\/\/\S+)/);
       if (match) resolve(match[1]);
     });
     child.once('error', reject);
-    child.once('exit', (code) => reject(new Error(`Chromium exited with ${code}\n${log}`)));
+    void exited.then((reason) => reject(new Error(`${reason}\n${stderr.tail(KEPT).join('\n')}`)));
   });
-  return { child, url };
+  return { child, url, exited, stderr };
 }
 
 export async function stop(cdp, child) {
   const exited = new Promise((resolve) => child.once('exit', resolve));
   await bounded(cdp.send('Browser.close').catch(ignore), 'Browser.close');
   cdp.close();
-  if (child.exitCode === null && (await bounded(exited, 'exit')) === TIMED_OUT) {
+  const running = child.exitCode === null && child.signalCode === null;
+  if (running && (await bounded(exited, 'exit')) === TIMED_OUT) {
     child.kill('SIGKILL');
     await exited;
   }
@@ -84,10 +117,14 @@ export async function launch({
   const shared = extensions.length > 0;
   const profile = await mkdtemp(join(tmpdir(), 'slicc-harness-'));
   const loaded = [...found.values()].map((root) => root.slice(0, -1));
-  const { child, url } = await start(profile, commandLine(profile, loaded, args));
-  const cdp = await connect(url);
+  const { child, url, exited, stderr } = await start(profile, commandLine(profile, loaded, args));
+  const cdp = await connect(url, {
+    exited,
+    tail: () => stderr.tail().map((line) => `stderr: ${line}`),
+  });
   const record = recorder(cdp, files, { coverage, exits: await breakpoints(server, exits) });
   const remote = await cdn(cdp, intercept);
+  await cdp.send('Target.setDiscoverTargets', { discover: true });
   await cdp.send('Target.setAutoAttach', {
     autoAttach: true,
     waitForDebuggerOnStart: true,
@@ -105,7 +142,9 @@ export async function launch({
     await Promise.all(closing.map((sent) => sent.catch(ignore)));
   }
 
-  async function finish(pages, browserContextId, dir, before) {
+  async function finish(pages, browserContextId, dir, before, mark) {
+    const log = stderr.since(mark).map((line) => `${line}\n`);
+    await writeFile(new URL('chrome-stderr.log', dir), log.join(''));
     await bounded(Promise.all(pages.map((opened) => opened.probed())), 'probes', 30000);
     const shots = pages.map((opened, i) =>
       opened.screenshot(new URL(`tab-${i + 1}.png`, dir)).catch(ignore)
@@ -117,11 +156,12 @@ export async function launch({
     const closing = shared
       ? sweep(before)
       : cdp.send('Target.disposeBrowserContext', { browserContextId });
-    await bounded(closing, 'dispose');
+    await bounded(closing.catch(ignore), 'dispose');
   }
 
   return {
     url: server.url,
+    pid: child.pid,
     cdn: remote.state,
     requests: server.requests,
     overrides: server.overrides,
@@ -136,7 +176,8 @@ export async function launch({
       server.overrides.clear();
       server.overridden.clear();
       const pages = [];
-      t.after(() => finish(pages, browserContextId, dir, before));
+      const mark = stderr.total;
+      t.after(() => finish(pages, browserContextId, dir, before, mark));
       const tab = async () => {
         const opened = page(cdp, await record.open(browserContextId), server, timeout, {
           stallAfter,

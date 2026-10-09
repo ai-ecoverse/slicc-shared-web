@@ -30,5 +30,9 @@ export function flights(now = Date.now) {
       .map(({ what, since }) => `pending ${what} for ${((at - since) / 1000).toFixed(1)}s`);
   }
 
-  return { watch, pending };
+  function loaded(targetId) {
+    requests.delete(targetId);
+  }
+
+  return { watch, loaded, pending };
 }
