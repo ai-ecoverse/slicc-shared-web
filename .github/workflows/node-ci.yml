@@ -15,6 +15,9 @@ on:
       test:
         type: string
         default: npm test
+      timeout-minutes:
+        type: number
+        default: 20
 
 permissions:
   contents: read
@@ -22,7 +25,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     env:
       LEFTHOOK: '0'
     steps:

@@ -32,9 +32,20 @@ export const flags = [
   '--window-size=1280,800',
 ];
 
-export function commandLine(profile, extensions = [], extra = []) {
+export const unrealistic = [
+  '--headless',
+  '--disable-background-timer-throttling',
+  '--disable-backgrounding-occluded-windows',
+  '--disable-renderer-backgrounding',
+];
+
+export function commandLine(profile, extensions = [], extra = [], realistic = false) {
   const loaded = extensions.length > 0;
-  const base = loaded ? flags.filter((flag) => flag !== '--disable-extensions') : flags;
+  const dropped = new Set([
+    ...(loaded ? ['--disable-extensions'] : []),
+    ...(realistic ? unrealistic : []),
+  ]);
+  const base = flags.filter((flag) => !dropped.has(flag));
   const load = loaded ? ['--enable-unsafe-extension-debugging'] : [];
   return [...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
 }
@@ -225,6 +236,7 @@ export async function launch({
   timeout,
   stallAfter,
   profile = inherited.SLICC_PROFILE === '1',
+  realistic = false,
 } = {}) {
   pruning ??= prune();
   await pruning;
@@ -238,7 +250,7 @@ export async function launch({
   const dumps = await crashpad();
   const { child, exited, stderr } = await start(
     userData,
-    commandLine(userData, loaded, args),
+    commandLine(userData, loaded, args, realistic),
     chromium.executablePath(),
     dumps.env
   );
