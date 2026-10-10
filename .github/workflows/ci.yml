@@ -34,3 +34,5 @@ jobs:
 
   test:
     uses: ./.github/workflows/node-ci.yml
+    with:
+      test: xvfb-run -a npm test
