@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-sha=9cc7617c94c24b84c4d6fd8edf92441378257d07
+sha=e795cea178fb2e7accab9cfc7018d2aeb181db7a
 dir="node_modules/.cache/slicc-no-comment-$sha"
 if [ ! -f "$dir/check.mjs" ]; then
   mkdir -p "$dir"
