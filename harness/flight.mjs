@@ -14,6 +14,14 @@ export function flights(now = Date.now) {
       const { request, type = 'Other', requestId } = params;
       requests.set(requestId, { what: `${request.method} ${request.url} (${type})`, since: now() });
     }
+    if (method === 'Network.responseReceived') {
+      const flight = requests.get(params.requestId);
+      if (flight) flight.status = params.response.status;
+    }
+    if (method === 'Network.dataReceived') {
+      const flight = requests.get(params.requestId);
+      if (flight) flight.bytes = (flight.bytes ?? 0) + params.dataLength;
+    }
     if (done.has(method)) requests.delete(params.requestId);
     if (method === 'Page.frameStartedNavigating') {
       const what = `navigation to ${params.url} (${params.navigationType})`;
@@ -27,7 +35,10 @@ export function flights(now = Date.now) {
     return [...navigations.values(), ...requests.values()]
       .sort((a, b) => a.since - b.since)
       .slice(0, 20)
-      .map(({ what, since }) => `pending ${what} for ${((at - since) / 1000).toFixed(1)}s`);
+      .map(({ what, since, status, bytes = 0 }) => {
+        const answer = status ? `, answered ${status} with ${bytes} bytes of body so far` : '';
+        return `pending ${what} for ${((at - since) / 1000).toFixed(1)}s${answer}`;
+      });
   }
 
   function loaded(targetId) {

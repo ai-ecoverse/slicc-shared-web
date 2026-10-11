@@ -87,6 +87,10 @@ export function decoded({ value, unserializableValue }) {
 
 export const STALL_AFTER = 30000;
 
+export function unanswered(error) {
+  return /: no answer in \d+ ms$/.test(error.message);
+}
+
 export function page(
   cdp,
   { sessionId, targetId },
@@ -158,7 +162,7 @@ export function page(
         if (last) return last;
       } catch (error) {
         if (error.fatal) throw error;
-        last = error.message;
+        if (last === undefined || !unanswered(error)) last = error.message;
       }
       await sleep(25);
     }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { stat } from 'node:fs/promises';
 import { after, test } from 'node:test';
 import { launch } from '@ai-ecoverse/slicc-shared-web/harness';
 
@@ -27,7 +28,9 @@ test('profiles the page, its dedicated and nested workers, and a shared worker',
   await page.reload();
   assert.ok(chrome.requests.includes('/worker.js'));
   assert.ok(chrome.requests.includes('/nested.js'));
-  assert.ok(page.responses.some((response) => response.url.endsWith('/page.js')));
+  const script = page.responses.find((response) => response.url.endsWith('/page.js'));
+  const { size } = await stat('test/integration/page/page.js');
+  assert.equal(Number(script.headers['content-length']), size);
   assert.deepEqual(page.errors, []);
 });
 
@@ -56,6 +59,15 @@ test('types into the page, overrides files and opens a second tab', async (t) =>
   await second.goto('/extra.json');
   await second.until(() => document.body.textContent.includes('"ok"'));
   assert.equal(second.dir.href, page.dir.href);
+  const extra = second.responses.find((response) => response.url.endsWith('/extra.json'));
+  assert.equal(extra.headers['content-length'], '11');
+});
+
+test('until reports the last answer when the deadline cuts the final check short', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const late = () => new Promise((resolve) => setTimeout(resolve, 100, false));
+  await assert.rejects(page.within(180, late), /\nlast result: false$/);
 });
 
 test('serves remotes from the CDN cache and injects failures', async (t) => {
