@@ -156,13 +156,16 @@ export function page(
   async function within(ms, fn, ...args) {
     const deadline = Date.now() + ms;
     let last;
+    let answered = false;
     for (let left = ms; left > 0; left = deadline - Date.now()) {
       try {
         last = await run(fn, args, left);
+        answered = true;
         if (last) return last;
       } catch (error) {
         if (error.fatal) throw error;
-        if (last === undefined || !unanswered(error)) last = error.message;
+        if (!answered || !unanswered(error)) last = error.message;
+        answered ||= !unanswered(error);
       }
       await sleep(25);
     }
