@@ -68,6 +68,8 @@ test('until reports the last answer when the deadline cuts the final check short
   await page.goto('/');
   const late = () => new Promise((resolve) => setTimeout(resolve, 100, false));
   await assert.rejects(page.within(180, late), /\nlast result: false$/);
+  const nothing = () => new Promise((resolve) => setTimeout(resolve, 100, undefined));
+  await assert.rejects(page.within(180, nothing), /\nlast result: undefined$/);
 });
 
 test('serves remotes from the CDN cache and injects failures', async (t) => {
