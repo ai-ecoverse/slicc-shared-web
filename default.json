@@ -42,11 +42,12 @@
       "minimumReleaseAge": "14 days"
     },
     {
-      "description": "Our own packages and shared config ship together: take them as soon as they are released, ahead of the hourly PR limit, whether Renovate sees them by package name (npm, reusable workflows, git URLs) or by dependency name.",
+      "description": "Our own packages and shared config ship together: take them as soon as they are released, ahead of the hourly PR limit, whether Renovate sees them by package name (npm, reusable workflows, git URLs, Go modules) or by dependency name.",
       "matchPackageNames": [
         "@ai-ecoverse/{/,}**",
         "ai-ecoverse/**",
-        "https://github.com/ai-ecoverse/**"
+        "https://github.com/ai-ecoverse/**",
+        "github.com/ai-ecoverse/**"
       ],
       "minimumReleaseAge": "0 days",
       "prPriority": 10
@@ -55,6 +56,11 @@
       "matchDepNames": ["@ai-ecoverse/{/,}**"],
       "minimumReleaseAge": "0 days",
       "prPriority": 10
+    },
+    {
+      "description": "Go modules: run go mod tidy after every update, so a bump that changes indirect requirements passes go mod tidy -diff in CI, and rewrite import paths on major updates.",
+      "matchManagers": ["gomod"],
+      "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"]
     },
     {
       "matchPackageNames": ["semantic-release", "@semantic-release/{/,}**"],
