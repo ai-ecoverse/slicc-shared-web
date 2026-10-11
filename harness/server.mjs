@@ -54,16 +54,23 @@ export async function serve({
     requests.push(pathname);
     if (overrides.has(pathname)) {
       overridden.add(pathname);
+      const body = overrides.get(pathname);
       return response
-        .writeHead(200, { ...headers, 'content-type': type(pathname), 'cache-control': 'no-cache' })
-        .end(overrides.get(pathname));
+        .writeHead(200, {
+          ...headers,
+          'content-type': type(pathname),
+          'content-length': Buffer.byteLength(body),
+          'cache-control': 'no-cache',
+        })
+        .end(body);
     }
     const file = locate(pathname);
-    const found = file && (await stat(file).catch(() => null))?.isFile();
-    if (!found) return response.writeHead(404, headers).end();
+    const info = file ? await stat(file).catch(() => null) : null;
+    if (!info?.isFile()) return response.writeHead(404, headers).end();
     response.writeHead(200, {
       ...headers,
       'content-type': type(file),
+      'content-length': info.size,
       'cache-control': 'no-cache',
     });
     createReadStream(file).pipe(response);

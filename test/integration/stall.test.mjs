@@ -6,6 +6,12 @@ import { launch } from '@ai-ecoverse/slicc-shared-web/harness';
 
 const chrome = await launch({ roots: [['/', 'test/integration/page/']], stallAfter: 300 });
 const slow = createServer((request, response) => {
+  if (request.url === '/trickle') {
+    response.writeHead(200, { 'access-control-allow-origin': '*', 'content-type': 'text/plain' });
+    response.write('begin');
+    setTimeout(() => response.end('end'), 4000);
+    return;
+  }
   setTimeout(() => {
     response
       .writeHead(200, { 'access-control-allow-origin': '*', 'content-type': 'text/html' })
@@ -69,6 +75,22 @@ test('a navigation that is not answered yet', async (t) => {
   assert.equal(
     await page.until(() => location.pathname === '/slow' && document.body.textContent),
     'slow'
+  );
+});
+
+test('a body that is still arriving', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/');
+  const trickle = late.replace('/slow', '/trickle');
+  assert.equal(await page.evaluate((url) => fetch(url).then((r) => r.text()), trickle), 'beginend');
+});
+
+test('the probe says a pending request already has its answer', async () => {
+  const log = await logOf('a-body-that-is-still-arriving');
+  assert.match(
+    log,
+    /^stall-1: pending GET http:\/\/127\.0\.0\.1:\d+\/trickle \(Fetch\) for \d+\.\ds, answered 200 with \d+ bytes of body so far$/m,
+    log
   );
 });
 
