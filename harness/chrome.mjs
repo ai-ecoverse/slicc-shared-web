@@ -263,8 +263,12 @@ export async function launch({
   let crashes = 0;
   let open = 0;
   let closed = false;
-  cdp.on(({ method }) => {
+  const visited = new Set();
+  cdp.on(({ method, params }) => {
     if (method === CRASHED || method === 'Target.targetCrashed') crashes += 1;
+    if (method === 'Target.targetCreated' || method === 'Target.targetInfoChanged') {
+      visited.add(params.targetInfo.url);
+    }
   });
   const record = recorder(cdp, files, {
     coverage,
@@ -291,24 +295,25 @@ export async function launch({
     await Promise.all(closing.map((sent) => sent.catch(ignore)));
   }
 
-  function warn(error) {
-    console.warn(`chrome: clearing storage failed: ${error.message}`);
-  }
-
   async function wipe(pages) {
-    const origins = new Set([new URL(server.url).origin]);
-    for (const opened of pages) {
-      for (const { url } of opened.responses) {
-        const { origin, protocol } = new URL(url);
-        if (protocol === 'http:' || protocol === 'https:') origins.add(origin);
-      }
-    }
+    const urls = [
+      server.url,
+      ...visited,
+      ...pages.flatMap(({ responses }) => responses.map(({ url }) => url)),
+    ];
+    const origins = new Set(
+      urls
+        .map((url) => URL.parse(url))
+        .filter((url) => url?.protocol === 'http:' || url?.protocol === 'https:')
+        .map(({ origin }) => origin)
+    );
     const { sessionId, targetId } = await record.open();
     const clearing = [...origins].map((origin) =>
-      cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }, sessionId, 60000)
+      cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }, sessionId, 120000)
     );
-    await Promise.all(clearing);
-    await cdp.send('Target.closeTarget', { targetId }).catch(ignore);
+    await Promise.all(clearing).finally(() =>
+      cdp.send('Target.closeTarget', { targetId }).catch(ignore)
+    );
   }
 
   async function finish(pages, browserContextId, dir, before, mark, seen) {
@@ -329,7 +334,7 @@ export async function launch({
       ? sweep(before)
       : cdp.send('Target.disposeBrowserContext', { browserContextId });
     await bounded(closing.catch(ignore), 'dispose');
-    if (persistent) await bounded(wipe(pages).catch(warn), 'clear storage', 60000);
+    if (persistent) await wipe(pages);
   }
 
   return {
@@ -347,6 +352,7 @@ export async function launch({
       const before = new Set(shared ? await tabs() : []);
       record.begin(browserContextId, dir, `${suite}-${slug(t.name)}`);
       server.requests.length = 0;
+      visited.clear();
       server.overrides.clear();
       server.overridden.clear();
       const pages = [];
