@@ -237,6 +237,7 @@ export async function launch({
   stallAfter,
   profile = inherited.SLICC_PROFILE === '1',
   realistic = false,
+  persistent = false,
 } = {}) {
   pruning ??= prune();
   await pruning;
@@ -244,7 +245,7 @@ export async function launch({
   const found = await unpacked(extensions);
   const fromExtension = extensionSource(found);
   const files = { ...server, source: (href) => server.source(href) ?? fromExtension(href) };
-  const shared = extensions.length > 0;
+  const shared = persistent || extensions.length > 0;
   const userData = await mkdtemp(join(tmpdir(), PREFIX));
   const loaded = [...found.values()].map((root) => root.slice(0, -1));
   const dumps = await crashpad();
@@ -262,8 +263,12 @@ export async function launch({
   let crashes = 0;
   let open = 0;
   let closed = false;
-  cdp.on(({ method }) => {
+  const visited = new Set();
+  cdp.on(({ method, params }) => {
     if (method === CRASHED || method === 'Target.targetCrashed') crashes += 1;
+    if (method === 'Target.targetCreated' || method === 'Target.targetInfoChanged') {
+      visited.add(params.targetInfo.url);
+    }
   });
   const record = recorder(cdp, files, {
     coverage,
@@ -290,6 +295,27 @@ export async function launch({
     await Promise.all(closing.map((sent) => sent.catch(ignore)));
   }
 
+  async function wipe(pages) {
+    const urls = [
+      server.url,
+      ...visited,
+      ...pages.flatMap(({ responses }) => responses.map(({ url }) => url)),
+    ];
+    const origins = new Set(
+      urls
+        .map((url) => URL.parse(url))
+        .filter((url) => url?.protocol === 'http:' || url?.protocol === 'https:')
+        .map(({ origin }) => origin)
+    );
+    const { sessionId, targetId } = await record.open();
+    const clearing = [...origins].map((origin) =>
+      cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }, sessionId, 120000)
+    );
+    await Promise.all(clearing).finally(() =>
+      cdp.send('Target.closeTarget', { targetId }).catch(ignore)
+    );
+  }
+
   async function finish(pages, browserContextId, dir, before, mark, seen) {
     const log = stderr.since(mark).map((line) => `${line}\n`);
     await writeFile(new URL('chrome-stderr.log', dir), log.join(''));
@@ -308,6 +334,7 @@ export async function launch({
       ? sweep(before)
       : cdp.send('Target.disposeBrowserContext', { browserContextId });
     await bounded(closing.catch(ignore), 'dispose');
+    if (persistent) await wipe(pages);
   }
 
   return {
@@ -325,6 +352,7 @@ export async function launch({
       const before = new Set(shared ? await tabs() : []);
       record.begin(browserContextId, dir, `${suite}-${slug(t.name)}`);
       server.requests.length = 0;
+      visited.clear();
       server.overrides.clear();
       server.overridden.clear();
       const pages = [];
