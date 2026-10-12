@@ -237,6 +237,7 @@ export async function launch({
   stallAfter,
   profile = inherited.SLICC_PROFILE === '1',
   realistic = false,
+  persistent = false,
 } = {}) {
   pruning ??= prune();
   await pruning;
@@ -244,7 +245,7 @@ export async function launch({
   const found = await unpacked(extensions);
   const fromExtension = extensionSource(found);
   const files = { ...server, source: (href) => server.source(href) ?? fromExtension(href) };
-  const shared = extensions.length > 0;
+  const shared = persistent || extensions.length > 0;
   const userData = await mkdtemp(join(tmpdir(), PREFIX));
   const loaded = [...found.values()].map((root) => root.slice(0, -1));
   const dumps = await crashpad();
@@ -290,6 +291,26 @@ export async function launch({
     await Promise.all(closing.map((sent) => sent.catch(ignore)));
   }
 
+  function warn(error) {
+    console.warn(`chrome: clearing storage failed: ${error.message}`);
+  }
+
+  async function wipe(pages) {
+    const origins = new Set([new URL(server.url).origin]);
+    for (const opened of pages) {
+      for (const { url } of opened.responses) {
+        const { origin, protocol } = new URL(url);
+        if (protocol === 'http:' || protocol === 'https:') origins.add(origin);
+      }
+    }
+    const { sessionId, targetId } = await record.open();
+    const clearing = [...origins].map((origin) =>
+      cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }, sessionId, 60000)
+    );
+    await Promise.all(clearing);
+    await cdp.send('Target.closeTarget', { targetId }).catch(ignore);
+  }
+
   async function finish(pages, browserContextId, dir, before, mark, seen) {
     const log = stderr.since(mark).map((line) => `${line}\n`);
     await writeFile(new URL('chrome-stderr.log', dir), log.join(''));
@@ -308,6 +329,7 @@ export async function launch({
       ? sweep(before)
       : cdp.send('Target.disposeBrowserContext', { browserContextId });
     await bounded(closing.catch(ignore), 'dispose');
+    if (persistent) await bounded(wipe(pages).catch(warn), 'clear storage', 60000);
   }
 
   return {
