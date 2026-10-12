@@ -58,6 +58,13 @@
       "prPriority": 10
     },
     {
+      "description": "fnox-build publishes @ai-ecoverse/fnox and its platform packages only as <upstream fnox version>-slicc.<build> prereleases, with latest pointing at the newest. Renovate skips prereleases by default, and from 1.39.0-slicc.1 would only offer 1.39.0-slicc.2, never 1.40.0-slicc.1, so allow unstable versions, but only -slicc.N ones and never past latest.",
+      "matchPackageNames": ["@ai-ecoverse/fnox", "@ai-ecoverse/fnox-*"],
+      "ignoreUnstable": false,
+      "respectLatest": true,
+      "allowedVersions": "/-slicc\\.\\d+$/"
+    },
+    {
       "description": "Go modules: run go mod tidy after every update, so a bump that changes indirect requirements passes go mod tidy -diff in CI, and rewrite import paths on major updates.",
       "matchManagers": ["gomod"],
       "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"]
