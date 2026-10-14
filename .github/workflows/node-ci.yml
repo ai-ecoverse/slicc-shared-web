@@ -18,13 +18,16 @@ on:
       timeout-minutes:
         type: number
         default: 20
+      runs-on:
+        type: string
+        default: ubuntu-latest
 
 permissions:
   contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     env:
       LEFTHOOK: '0'
@@ -45,7 +48,12 @@ jobs:
 
       - name: Chromium system dependencies
         if: inputs.chromium
-        run: npx playwright-core install-deps chromium
+        run: |
+          if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then
+            npx playwright-core install-deps chromium
+          else
+            echo "::notice title=Chromium system dependencies::No root on $RUNNER_NAME, so install-deps is skipped and the runner image's system libraries serve Chromium."
+          fi
 
       - name: Integration tests with coverage, CPU profiles, and screenshots
         env:
