@@ -65,6 +65,20 @@
       "allowedVersions": "/-slicc\\.\\d+$/"
     },
     {
+      "description": "@ai-ecoverse/slicc-kernel and @ai-ecoverse/wasi-pnpm are certified together: move them in one PR, majors included, so they pass CI as a pair. A repo that pins only one of them still gets its PR.",
+      "matchPackageNames": ["@ai-ecoverse/slicc-kernel", "@ai-ecoverse/wasi-pnpm"],
+      "groupName": "kernel and pnpm",
+      "groupSlug": "kernel-and-pnpm",
+      "separateMajorMinor": false
+    },
+    {
+      "description": "@ai-ecoverse/wasm-coreutils and @ai-ecoverse/wasm-procps are certified together: move them in one PR, majors included. A repo that pins only one of them still gets its PR.",
+      "matchPackageNames": ["@ai-ecoverse/wasm-coreutils", "@ai-ecoverse/wasm-procps"],
+      "groupName": "coreutils and procps",
+      "groupSlug": "coreutils-and-procps",
+      "separateMajorMinor": false
+    },
+    {
       "description": "Go modules: run go mod tidy after every update, so a bump that changes indirect requirements passes go mod tidy -diff in CI, and rewrite import paths on major updates.",
       "matchManagers": ["gomod"],
       "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"]
