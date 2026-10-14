@@ -96,6 +96,7 @@ Why it works the way it does:
 - monocart's `add()` from parallel test processes loses data, so each test writes raw JSON and the teardown merges it once.
 - Coverage of a script served from `chrome.overrides` would be mapped onto the file on disk, so a path overridden during a test is left out of that test's coverage.
 - A CI cache restored with a prefix key kept packuments from before a release, so pnpm in the page saw an outdated `latest` and failed with `ERR_PNPM_NO_MATCHING_VERSION`. Tarballs and versioned CDN files never change and stay cached forever; registry documents do change, so the disk copy is only the offline fallback.
+- An unscoped packument cached at `registry.npmjs.org/<name>` sat where the tarball directory `registry.npmjs.org/<name>/-/` goes, so saving one after the other failed with `EISDIR` and pnpm in the page saw `ECONNREFUSED`. Registry documents are now cached as `<path>/index.json`; a file left at the old place is a miss and is removed when something needs its place.
 - `--disable-extensions --disable-component-extensions-with-background-pages` keeps a Hangouts service worker out of every run.
 - The attach event can arrive before `Target.createTarget` returns, so new tabs wait on a slot keyed by target id.
 - A worker blocked in `Atomics.wait`, or one that is already gone, may never answer; snapshots give up after 3 s, and closing a context or the browser after 10 s. A call to a target that detaches or crashes fails instead of waiting forever, and a new tab that never attaches fails after 10 s.
