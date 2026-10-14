@@ -96,3 +96,29 @@ test('a packument cached where its tarball directory goes is a miss, and is repl
   const names = ['v1 left-pad', 'v1 left-pad-1.3.0.tgz'];
   assert.deepEqual(await session(cwd, 'v1', urls), { bodies: [...names, ...names], calls: 2 });
 });
+
+test('downloads racing to replace an old packument file all succeed', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'slicc-cdn-'));
+  dirs.push(cwd);
+  const registry = join(cwd, 'node_modules/.cache/slicc-harness/cdn/registry.npmjs.org');
+  await mkdir(registry, { recursive: true });
+  await writeFile(join(registry, 'left-pad'), 'old left-pad');
+  const { stdout } = await run(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `const { download } = await import(process.env.HARNESS);
+globalThis.fetch = async (url) => new Response(new URL(url).pathname.split('/').pop());
+const urls = ['1.1.0', '1.2.0', '1.3.0'].map((v) => 'https://registry.npmjs.org/left-pad/-/left-pad-' + v + '.tgz');
+const bodies = await Promise.all(urls.map((url) => download(url).then(String, (error) => error.message)));
+console.log(JSON.stringify(bodies));`,
+    ],
+    { cwd, env: { ...process.env, HARNESS: harness } }
+  );
+  assert.deepEqual(JSON.parse(stdout), [
+    'left-pad-1.1.0.tgz',
+    'left-pad-1.2.0.tgz',
+    'left-pad-1.3.0.tgz',
+  ]);
+});

@@ -35,7 +35,7 @@ async function unblock(dir) {
     path = join(path, part);
     const found = await stat(path).catch(ignore);
     if (!found) return;
-    if (!found.isDirectory()) return unlink(path);
+    if (!found.isDirectory()) return unlink(path).catch(ignore);
   }
 }
 
