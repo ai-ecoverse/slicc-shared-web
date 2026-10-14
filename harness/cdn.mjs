@@ -1,5 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type } from './server.mjs';
 import { cache, ignore } from './util.mjs';
@@ -28,8 +28,24 @@ export function mutable(url) {
   return hostname.startsWith('registry.') && !/\/-\/[^/]+\.tgz$/.test(pathname);
 }
 
+async function unblock(dir) {
+  const root = fileURLToPath(store);
+  let path = root;
+  for (const part of relative(root, dir).split(sep)) {
+    path = join(path, part);
+    const found = await stat(path).catch(ignore);
+    if (!found) return;
+    if (!found.isDirectory()) return unlink(path);
+  }
+}
+
 async function save(file, body) {
-  await mkdir(dirname(fileURLToPath(file)), { recursive: true });
+  const dir = dirname(fileURLToPath(file));
+  await mkdir(dir, { recursive: true }).catch(async (error) => {
+    if (error.code !== 'EEXIST' && error.code !== 'ENOTDIR') throw error;
+    await unblock(dir);
+    await mkdir(dir, { recursive: true });
+  });
   const partial = new URL(`${file.href}.${process.pid}`);
   await writeFile(partial, body);
   await rename(partial, file);
@@ -50,8 +66,9 @@ async function refresh(url, file) {
 export async function download(url) {
   const { host, pathname, search } = new URL(url);
   const query = search ? encodeURIComponent(search) : '';
-  const file = new URL(`./${host}${pathname}${query}`.replaceAll('%', '%25'), store);
+  const path = `./${host}${pathname}${query}`;
   if (mutable(url)) {
+    const file = new URL(`${path}/index.json`.replaceAll('%', '%25'), store);
     if (!fresh.has(url)) {
       const pending = refresh(url, file);
       fresh.set(url, pending);
@@ -59,6 +76,7 @@ export async function download(url) {
     }
     return fresh.get(url);
   }
+  const file = new URL(path.replaceAll('%', '%25'), store);
   const hit = await readFile(file).catch(ignore);
   if (hit) return hit;
   return save(file, await fetched(url));
