@@ -231,6 +231,7 @@ export function unguarded(cdp) {
   const listeners = new Set();
   let events = null;
   cdp.on((message) => {
+    if (message.method === undefined) return;
     events?.push(message);
     for (const listener of listeners) {
       try {
