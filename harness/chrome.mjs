@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { env as inherited } from 'node:process';
 import { promisify } from 'node:util';
-import { executablePath } from './browser.mjs';
+import { executablePath, explicit } from './browser.mjs';
 import { cdn } from './cdn.mjs';
 import { CRASHED, connect, pipe } from './cdp.mjs';
 import { crashpad } from './dumps.mjs';
@@ -241,7 +241,7 @@ export async function launch({
   persistent = false,
   executable,
 } = {}) {
-  const browser = executable ?? (await executablePath());
+  const browser = executable === undefined ? await executablePath() : explicit(executable);
   pruning ??= prune();
   await pruning;
   const server = await serve({ roots, aliases, isolated });
@@ -257,7 +257,13 @@ export async function launch({
     commandLine(userData, loaded, args, realistic),
     browser,
     dumps.env
-  );
+  ).catch(async (error) => {
+    await server.close();
+    await Promise.all(
+      [userData, dumps.dir].map((dir) => rm(dir, { recursive: true, force: true }))
+    );
+    throw error;
+  });
   const untrack = track(child, [userData, dumps.dir]);
   const cdp = await connect(pipe(child.stdio[3], child.stdio[4]), {
     exited,

@@ -28,6 +28,11 @@ function isFile(path) {
 export const HINT =
   'no Chromium for the harness: pass launch({ executable }), set CHROME_PATH, or install @ai-ecoverse/slicc-cdp and run `npx slicc-cdp install-browser --version <x.y.z.w>` (or install playwright-core and run `npx playwright-core install chromium`)';
 
+export function explicit(path) {
+  if (isFile(path)) return path;
+  throw new Error(`launch({ executable }) is ${path}, which is not a file`);
+}
+
 export async function executablePath({ env = inherited, importer = load } = {}) {
   if (env.CHROME_PATH) {
     if (isFile(env.CHROME_PATH)) return env.CHROME_PATH;
