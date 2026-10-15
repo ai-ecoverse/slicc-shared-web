@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parse } from 'acorn';
+import { ALL, BODY, describe } from './exports.mjs';
 
 export const code = /\.(m|c)?(j|t)sx?$/;
 const tests = /\.test\.(m|c)?(j|t)sx?$/;
@@ -65,60 +66,6 @@ function program(file) {
     if (!/\.c(j|t)s$/.test(file)) throw error;
     return parse(source, { ...options, sourceType: 'script', allowReturnOutsideFunction: true });
   }
-}
-
-const literal = (node) => {
-  if (node?.type === 'Literal' && typeof node.value === 'string') return node.value;
-  if (node?.type === 'TemplateLiteral' && node.expressions.length === 0) {
-    return node.quasis[0].value.cooked;
-  }
-  return undefined;
-};
-
-const metaUrl = (node) =>
-  node?.type === 'MemberExpression' &&
-  node.object.type === 'MetaProperty' &&
-  node.property.name === 'url';
-
-function specifier(node) {
-  switch (node.type) {
-    case 'ImportDeclaration':
-    case 'ExportAllDeclaration':
-    case 'ExportNamedDeclaration':
-    case 'ImportExpression':
-      return literal(node.source);
-    case 'CallExpression':
-      return node.callee.type === 'Identifier' && node.callee.name === 'require'
-        ? literal(node.arguments[0])
-        : undefined;
-    case 'NewExpression':
-      return node.callee.type === 'Identifier' &&
-        node.callee.name === 'URL' &&
-        metaUrl(node.arguments[1])
-        ? literal(node.arguments[0])
-        : undefined;
-    default:
-      return undefined;
-  }
-}
-
-function specifiers(ast) {
-  const found = [];
-  const stack = [ast];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    const value = specifier(node);
-    if (value !== undefined) found.push(value);
-    for (const key of Object.keys(node)) {
-      const child = node[key];
-      if (Array.isArray(child)) {
-        for (const item of child) if (item && typeof item.type === 'string') stack.push(item);
-      } else if (child && typeof child.type === 'string') {
-        stack.push(child);
-      }
-    }
-  }
-  return found;
 }
 
 function candidates(target) {
@@ -243,52 +190,112 @@ function resolver(root) {
   };
 }
 
-function graph(root, starts) {
+function modules(root) {
   const find = resolver(root);
-  const edges = new Map();
-  const queue = [...starts];
-  while (queue.length > 0) {
-    const file = queue.pop();
-    if (edges.has(file)) continue;
-    const out = [];
-    edges.set(file, out);
-    if (!code.test(file)) continue;
-    let ast;
-    try {
-      ast = program(file);
-    } catch (error) {
-      throw new ParseError(`${relative(root, file)}: ${error.message}`);
-    }
-    for (const spec of specifiers(ast)) {
-      const found = find(file, spec);
-      if (found?.hit) {
-        out.push(found.hit);
-        queue.push(found.hit);
-      } else if (found) {
-        out.push(...found.missing);
+  const cache = new Map();
+  const load = (file) => {
+    if (!cache.has(file)) {
+      let info;
+      if (code.test(file)) {
+        try {
+          info = describe(program(file));
+        } catch (error) {
+          throw new ParseError(`${relative(root, file)}: ${error.message}`);
+        }
       }
+      cache.set(file, info);
     }
-  }
-  return edges;
+    return cache.get(file);
+  };
+  return { find, load };
 }
 
-function reaching(edges, changed) {
-  const back = new Map();
-  for (const [file, out] of edges) {
-    for (const target of out) {
-      if (!back.has(target)) back.set(target, []);
-      back.get(target).push(file);
+function provider({ find, load }) {
+  const memo = new Map();
+  const provides = (file, name, stack = new Set()) => {
+    const key = `${file}\0${name}`;
+    if (memo.has(key)) return memo.get(key);
+    if (stack.has(key)) return false;
+    stack.add(key);
+    const info = load(file);
+    let answer;
+    if (!info || info.whole) answer = undefined;
+    else if (info.locals.has(name) || info.reexports.has(name)) answer = true;
+    else answer = starred(file, info, name, stack);
+    memo.set(key, answer);
+    return answer;
+  };
+  const starred = (file, info, name, stack) => {
+    let answer = false;
+    for (const spec of info.stars) {
+      const hit = find(file, spec)?.hit;
+      const own = hit ? provides(hit, name, stack) : undefined;
+      if (own === undefined) return undefined;
+      answer ||= own;
     }
+    return answer;
+  };
+  return provides;
+}
+
+function reacher(graph) {
+  const { find } = graph;
+  const context = { find, provides: provider(graph) };
+  return (start) => {
+    const touched = new Set();
+    const seen = new Set();
+    const queue = [[start, BODY]];
+    const go = (file, spec, name) => {
+      const found = find(file, spec);
+      if (found?.hit) queue.push([found.hit, name]);
+      else if (found) for (const path of found.missing) touched.add(path);
+    };
+    while (queue.length > 0) {
+      const [file, name] = queue.pop();
+      const key = `${file}\0${name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      touched.add(file);
+      const info = graph.load(file);
+      if (!info) continue;
+      for (const [next, wanted, spec] of step(info, name, file, context)) {
+        if (spec === undefined) queue.push([next, wanted]);
+        else go(next, spec, wanted);
+      }
+    }
+    return touched;
+  };
+}
+
+function starred(file, info, name, { find, provides }) {
+  const targets = info.stars.map((spec) => find(file, spec)?.hit);
+  if (targets.some((target) => !target)) return [[file, ALL]];
+  const answers = targets.map((target) => provides(target, name));
+  if (answers.some((answer) => answer === undefined)) return [[file, ALL]];
+  const owners = targets.filter((_, index) => answers[index]);
+  return owners.length > 0 ? owners.map((target) => [target, name]) : [[file, ALL]];
+}
+
+function step(info, name, file, context) {
+  if (name === BODY) {
+    return [
+      ...info.imports.flatMap(({ spec, names }) => names.map((wanted) => [file, wanted, spec])),
+      ...info.dynamic.map((spec) => [file, ALL, spec]),
+    ];
   }
-  const seen = new Set();
-  const queue = [...changed];
-  while (queue.length > 0) {
-    const file = queue.pop();
-    if (seen.has(file)) continue;
-    seen.add(file);
-    queue.push(...(back.get(file) ?? []));
+  if (info.whole) return [[file, BODY]];
+  if (name === ALL) {
+    return [
+      [file, BODY],
+      ...[...info.reexports.values()].map(({ spec, name: wanted }) => [file, wanted, spec]),
+      ...info.stars.map((spec) => [file, ALL, spec]),
+    ];
   }
-  return seen;
+  if (info.locals.has(name)) return [[file, BODY]];
+  const again = info.reexports.get(name);
+  if (again) return [[file, again.name, again.spec]];
+  if (name === 'default' || info.stars.length === 0) return [[file, ALL]];
+  return starred(file, info, name, context);
 }
 
 export function select({ root, changed, since }) {
@@ -297,7 +304,8 @@ export function select({ root, changed, since }) {
   const all = files.filter((file) => tests.test(file));
   const fresh = files.filter((file) => since === undefined || statSync(file).mtimeMs > since);
   const touched = new Set([...changed.map((file) => resolve(root, file)), ...fresh]);
-  const reached = reaching(graph(root, all), touched);
+  const reach = reacher(modules(root));
+  const reached = new Set(all.filter((test) => [...reach(test)].some((file) => touched.has(file))));
   const posix = (file) => relative(root, file).split(sep).join('/');
   return {
     tests: all
