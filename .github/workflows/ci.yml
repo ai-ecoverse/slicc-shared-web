@@ -36,7 +36,7 @@ jobs:
       - name: Renovate preset
         env:
           # renovate: datasource=npm depName=renovate
-          RENOVATE: 44.147.0
+          RENOVATE: 44.148.0
         run: npx --yes --package "renovate@$RENOVATE" -- renovate-config-validator --strict default.json renovate.json
 
   test:
