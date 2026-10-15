@@ -66,7 +66,16 @@
     "semantic-release": "25.0.9"
   },
   "peerDependencies": {
+    "@ai-ecoverse/slicc-cdp": ">=1.26.0",
     "monocart-coverage-reports": ">=2.13.0",
     "playwright-core": ">=1.50.0"
+  },
+  "peerDependenciesMeta": {
+    "@ai-ecoverse/slicc-cdp": {
+      "optional": true
+    },
+    "playwright-core": {
+      "optional": true
+    }
   }
 }
