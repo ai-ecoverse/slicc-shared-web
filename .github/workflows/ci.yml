@@ -28,10 +28,16 @@ jobs:
       - run: npm ci
 
       - name: Workflows
-        run: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7 && ./actionlint -color
+        env:
+          # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$
+          ACTIONLINT: 1.7.7
+        run: bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v$ACTIONLINT/scripts/download-actionlint.bash") "$ACTIONLINT" && ./actionlint -color
 
       - name: Renovate preset
-        run: npx --yes --package renovate@44.133.0 -- renovate-config-validator --strict default.json renovate.json
+        env:
+          # renovate: datasource=npm depName=renovate
+          RENOVATE: 44.133.0
+        run: npx --yes --package "renovate@$RENOVATE" -- renovate-config-validator --strict default.json renovate.json
 
   test:
     uses: ./.github/workflows/node-ci.yml

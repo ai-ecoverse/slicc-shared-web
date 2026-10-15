@@ -27,6 +27,19 @@
         "https://cdn\\.jsdelivr\\.net/npm/(?<depName>(?:@[^/@\\s'\"`]+/)?[^/@\\s'\"`]+)@(?<currentValue>\\d[^/\\s'\"`]*)"
       ],
       "datasourceTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "description": "Versions pinned in workflow and action files, each annotated on the line above with # renovate: datasource=<datasource> depName=<name>, optionally followed by packageName=, versioning=, extractVersion= and registryUrl=. The version is the first one on the next line that follows a colon, an equals sign or an @, so it covers env: values, with: inputs, uses: refs and inline pkg@version installs.",
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/",
+        "/(^|/)action\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z-.]+?) depName=(?<depName>[^\\s]+?)(?: packageName=(?<packageName>[^\\s]+?))?(?: versioning=(?<versioning>[^\\s]+?))?(?: extractVersion=(?<extractVersion>[^\\s]+?))?(?: registryUrl=(?<registryUrl>[^\\s]+?))?[ \\t]*\\r?\\n[^\\n]*?(?:[:=][ \\t]*[\"']?|@)(?<currentValue>v?\\d[^\\s\"'@,]*)"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver-coerced{{/if}}",
+      "extractVersionTemplate": "{{#if extractVersion}}{{{extractVersion}}}{{/if}}"
     }
   ],
   "packageRules": [
@@ -58,10 +71,14 @@
       "prPriority": 10
     },
     {
-      "description": "fnox-build publishes @ai-ecoverse/fnox and its platform packages only as <upstream fnox version>-slicc.<build> prereleases, with latest pointing at the newest. Renovate skips prereleases by default, and from 1.39.0-slicc.1 would only offer 1.39.0-slicc.2, never 1.40.0-slicc.1, so allow unstable versions, but only -slicc.N ones and never past latest.",
-      "matchPackageNames": ["@ai-ecoverse/fnox", "@ai-ecoverse/fnox-*"],
+      "description": "Our own packages version their builds as <upstream version>-<build>, such as wasm-coreutils 9.12.0-6 or wasm-tls-engine 3.6.7-1, which Renovate reads as prereleases and by default never offers, so a pin like 3.6.5-1 never moves. Allow unstable versions, but never past the npm latest dist-tag, which homescoop moves only to certified builds, so a build that is only on stage or next is not offered.",
+      "matchPackageNames": ["@ai-ecoverse/{/,}**"],
       "ignoreUnstable": false,
-      "respectLatest": true,
+      "respectLatest": true
+    },
+    {
+      "description": "fnox-build publishes @ai-ecoverse/fnox and its platform packages only as <upstream fnox version>-slicc.<build> prereleases, with latest pointing at the newest; take only the -slicc.N ones.",
+      "matchPackageNames": ["@ai-ecoverse/fnox", "@ai-ecoverse/fnox-*"],
       "allowedVersions": "/-slicc\\.\\d+$/"
     },
     {
