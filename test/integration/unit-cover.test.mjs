@@ -304,3 +304,58 @@ test('npm run test:unit runs the files in SLICC_UNIT_TESTS that its own patterns
     /^LH:0$/m
   );
 });
+
+const barrels = {
+  'src/a.mjs': 'export const a = () => "a";\n',
+  'src/b.mjs': 'export const b = () => "b";\n',
+  'src/c.mjs': 'export default () => "c";\n',
+  'src/d.mjs': 'export const d = () => "d";\n',
+  'src/e.mjs': 'export const e = () => "e";\n',
+  'src/f.mjs': 'export const f = () => "f";\n',
+  'src/index.mjs':
+    "export { a } from './a.mjs';\nexport * from './b.mjs';\nexport { default as c } from './c.mjs';\nimport { d } from './d.mjs';\nexport { d };\n",
+  'src/g.cjs': 'exports.g = () => "g";\n',
+  'src/h.mjs': 'export const h = () => "h";\n',
+  'src/mixed.mjs': "export * from './g.cjs';\nexport * from './h.mjs';\n",
+  'src/open.mjs':
+    "export * from 'node:path';\nexport * from './e.mjs';\nexport * from './f.mjs';\n",
+  'test/unit/a.test.mjs': unit('a', "import { a } from '../../src/index.mjs';\na();"),
+  'test/unit/b.test.mjs': unit('b', "import { b } from '../../src/index.mjs';\nb();"),
+  'test/unit/c.test.mjs': unit('c', "import { c } from '../../src/index.mjs';\nc();"),
+  'test/unit/d.test.mjs': unit('d', "import { d } from '../../src/index.mjs';\nd();"),
+  'test/unit/ns.test.mjs': unit('ns', "import * as all from '../../src/index.mjs';\nall.a();"),
+  'test/unit/dyn.test.mjs': unit('dyn', "const { b } = await import('../../src/index.mjs');\nb();"),
+  'test/unit/then.test.mjs': unit(
+    'then',
+    "await import('../../src/index.mjs').then((m) => m.b());"
+  ),
+  'test/unit/rest.test.mjs': unit(
+    'rest',
+    "const { b, ...rest } = await import('../../src/index.mjs');\nb(rest);"
+  ),
+  'test/unit/mixed.test.mjs': unit('mixed', "import { h } from '../../src/mixed.mjs';\nh();"),
+  'test/unit/open.test.mjs': unit('open', "import { e } from '../../src/open.mjs';\ne();"),
+};
+
+test('a test that imports names from a barrel, statically or by destructuring an awaited import(), runs only for the modules that provide them', async () => {
+  const dir = await fixture(barrels);
+  const expected = {
+    'src/a.mjs': ['a', 'ns', 'rest', 'then'],
+    'src/b.mjs': ['b', 'dyn', 'ns', 'rest', 'then'],
+    'src/c.mjs': ['c', 'ns', 'rest', 'then'],
+    'src/d.mjs': ['d', 'ns', 'rest', 'then'],
+    'src/e.mjs': ['open'],
+    'src/f.mjs': ['open'],
+    'src/g.cjs': ['mixed'],
+    'src/h.mjs': ['mixed'],
+  };
+  for (const [file, ran] of Object.entries(expected)) {
+    rmSync(join(dir, 'ran.txt'), { force: true });
+    const body = readFileSync(join(dir, file), 'utf8').replace('=> "', '=> "changed ');
+    change(dir, { [file]: body });
+    const run = cover(dir);
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(run.ran, ran, file);
+    git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', file, '--no-verify');
+  }
+});
