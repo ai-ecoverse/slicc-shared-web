@@ -198,7 +198,7 @@ function modules(root) {
       let info;
       if (code.test(file)) {
         try {
-          info = describe(program(file));
+          info = describe(program(file), /\.c(j|t)s$/.test(file));
         } catch (error) {
           throw new ParseError(`${relative(root, file)}: ${error.message}`);
         }

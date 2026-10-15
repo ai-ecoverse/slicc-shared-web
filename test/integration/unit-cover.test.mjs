@@ -314,6 +314,9 @@ const barrels = {
   'src/f.mjs': 'export const f = () => "f";\n',
   'src/index.mjs':
     "export { a } from './a.mjs';\nexport * from './b.mjs';\nexport { default as c } from './c.mjs';\nimport { d } from './d.mjs';\nexport { d };\n",
+  'src/g.cjs': 'exports.g = () => "g";\n',
+  'src/h.mjs': 'export const h = () => "h";\n',
+  'src/mixed.mjs': "export * from './g.cjs';\nexport * from './h.mjs';\n",
   'src/open.mjs':
     "export * from 'node:path';\nexport * from './e.mjs';\nexport * from './f.mjs';\n",
   'test/unit/a.test.mjs': unit('a', "import { a } from '../../src/index.mjs';\na();"),
@@ -330,6 +333,7 @@ const barrels = {
     'rest',
     "const { b, ...rest } = await import('../../src/index.mjs');\nb(rest);"
   ),
+  'test/unit/mixed.test.mjs': unit('mixed', "import { h } from '../../src/mixed.mjs';\nh();"),
   'test/unit/open.test.mjs': unit('open', "import { e } from '../../src/open.mjs';\ne();"),
 };
 
@@ -342,6 +346,8 @@ test('a test that imports names from a barrel, statically or by destructuring an
     'src/d.mjs': ['d', 'ns', 'rest', 'then'],
     'src/e.mjs': ['open'],
     'src/f.mjs': ['open'],
+    'src/g.cjs': ['mixed'],
+    'src/h.mjs': ['mixed'],
   };
   for (const [file, ran] of Object.entries(expected)) {
     rmSync(join(dir, 'ran.txt'), { force: true });

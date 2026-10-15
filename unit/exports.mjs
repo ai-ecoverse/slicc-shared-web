@@ -147,9 +147,9 @@ const handlers = {
   },
 };
 
-export function describe(ast) {
+export function describe(ast, commonjs = false) {
   const info = {
-    whole: ast.sourceType !== 'module',
+    whole: commonjs || ast.sourceType !== 'module',
     imports: [],
     bindings: new Map(),
     aliases: new Map(),
