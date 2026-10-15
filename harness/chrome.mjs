@@ -225,6 +225,65 @@ export async function prune(dir = tmpdir(), grace = GRACE) {
 
 let pruning = null;
 
+export const WAIT = 10000;
+
+export function unguarded(cdp) {
+  const listeners = new Set();
+  let events = null;
+  cdp.on((message) => {
+    events?.push(message);
+    for (const listener of listeners) {
+      try {
+        listener(message);
+      } catch (error) {
+        queueMicrotask(() => {
+          throw error;
+        });
+      }
+    }
+  });
+  const off = (listener) => listeners.delete(listener);
+  const on = (listener) => {
+    listeners.add(listener);
+    return () => off(listener);
+  };
+  return {
+    send: (method, params = {}, sessionId = undefined) => cdp.send(method, params, sessionId),
+    on,
+    off,
+    get events() {
+      events ??= [];
+      return events;
+    },
+    waitEvent(match, ...rest) {
+      const method = typeof match === 'string' ? match : undefined;
+      const named = method && (rest.length > 1 || typeof rest[0] === 'function');
+      const [predicate, ms = WAIT] = method ? (named ? rest : [null, ...rest]) : [match, ...rest];
+      const wanted = (event) =>
+        (!method || event.method === method) && (!predicate || predicate(event));
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          off(listener);
+          reject(new Error(`waitEvent ${method ?? 'predicate'}: no event in ${ms} ms`));
+        }, ms);
+        const settle = (fn, value) => {
+          clearTimeout(timer);
+          off(listener);
+          fn(value);
+        };
+        const listener = (event) => {
+          try {
+            if (wanted(event)) settle(resolve, event);
+          } catch (error) {
+            settle(reject, error);
+          }
+        };
+        on(listener);
+      });
+    },
+  };
+}
+
 export async function launch({
   roots,
   aliases,
@@ -347,6 +406,7 @@ export async function launch({
   }
 
   return {
+    cdp: unguarded(cdp),
     url: server.url,
     pid: child.pid,
     profile: userData,
