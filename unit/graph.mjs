@@ -132,9 +132,56 @@ function candidates(target) {
   ];
 }
 
+function skip(text, at) {
+  if (text[at] !== '/') return at;
+  if (text[at + 1] === '/') {
+    const end = text.indexOf('\n', at);
+    return end === -1 ? text.length : end;
+  }
+  if (text[at + 1] === '*') {
+    const end = text.indexOf('*/', at + 2);
+    return end === -1 ? text.length : end + 2;
+  }
+  return at;
+}
+
+function quoted(text, at) {
+  let end = at + 1;
+  while (end < text.length && text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+  return end + 1;
+}
+
+export function jsonc(text) {
+  let out = '';
+  let comma = false;
+  let at = 0;
+  while (at < text.length) {
+    const next = skip(text, at);
+    if (next !== at) {
+      at = next;
+      continue;
+    }
+    const char = text[at];
+    if (/\s/.test(char)) {
+      at += 1;
+      continue;
+    }
+    if (comma && char !== '}' && char !== ']') out += ',';
+    comma = char === ',';
+    if (comma) {
+      at += 1;
+      continue;
+    }
+    const end = char === '"' ? quoted(text, at) : at + 1;
+    out += text.slice(at, end);
+    at = end;
+  }
+  return JSON.parse(comma ? `${out},` : out);
+}
+
 function readJson(path) {
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    return jsonc(readFileSync(path, 'utf8'));
   } catch {
     return undefined;
   }
@@ -185,12 +232,14 @@ function resolver(root) {
     if (spec.startsWith('.')) targets = [resolve(dirname(from), spec)];
     else if (isAbsolute(spec)) targets = [spec];
     else targets = aliased(spec, aliases);
+    const missing = [];
     for (const target of targets) {
-      const path = target.split(/[?#]/)[0];
-      const hit = candidates(path).find(isFile);
-      if (hit && !hit.includes(`${sep}node_modules${sep}`)) return hit;
+      const options = candidates(target.split(/[?#]/)[0]);
+      const hit = options.find(isFile);
+      if (hit) return hit.includes(`${sep}node_modules${sep}`) ? undefined : { hit };
+      missing.push(...options);
     }
-    return undefined;
+    return { missing };
   };
 }
 
@@ -211,10 +260,12 @@ function graph(root, starts) {
       throw new ParseError(`${relative(root, file)}: ${error.message}`);
     }
     for (const spec of specifiers(ast)) {
-      const hit = find(file, spec);
-      if (hit) {
-        out.push(hit);
-        queue.push(hit);
+      const found = find(file, spec);
+      if (found?.hit) {
+        out.push(found.hit);
+        queue.push(found.hit);
+      } else if (found) {
+        out.push(...found.missing);
       }
     }
   }

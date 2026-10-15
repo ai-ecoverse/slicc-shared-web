@@ -178,6 +178,15 @@ test('a staged file no test reaches runs no tests and leaves its lines uncovered
   assert.match(record(run.covered, 'src/orphan.mjs'), /^LH:0$/m);
 });
 
+test('deleting a module a test still imports runs that test, which fails the hook', async () => {
+  const dir = await fixture(js);
+  git(dir, 'rm', '-q', 'src/b.mjs');
+  const run = cover(dir);
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /running 1 of 4 unit test files/);
+  assert.equal(run.covered, undefined);
+});
+
 test('docs, YAML and lockfiles alone skip the unit tests and diff coverage', async () => {
   const dir = await fixture(js);
   change(dir, {
@@ -221,13 +230,11 @@ test('SLICC_UNIT_ALL=1 runs every unit test', async () => {
   assert.deepEqual(run.ran, ['a', 'b', 'chain', 'lazy']);
 });
 
-test('TypeScript: tsconfig paths resolve, type-only imports do not count, and .js specifiers find .ts files', async () => {
+test('TypeScript: tsconfig paths resolve from JSONC, type-only imports do not count, and .js specifiers find .ts files', async () => {
   const dir = await fixture(
     {
-      'tsconfig.json': JSON.stringify({
-        extends: './tsconfig.base.json',
-        compilerOptions: { paths: { '#lib/*': ['./src/lib/*'] } },
-      }),
+      'tsconfig.json':
+        '{\n  /* JSONC, as TypeScript reads it */\n  "extends": "./tsconfig.base.json",\n  "compilerOptions": {\n    "paths": { "#lib/*": ["./src/lib/*"], },\n  },\n}\n',
       'tsconfig.base.json': JSON.stringify({ compilerOptions: { strict: true } }),
       'src/lib/math.ts':
         'export function add<T extends number>(a: T, b: T): number {\n  return a + b;\n}\n',
