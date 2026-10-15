@@ -280,7 +280,7 @@ function step(info, name, file, context) {
   if (name === BODY) {
     return [
       ...info.imports.flatMap(({ spec, names }) => names.map((wanted) => [file, wanted, spec])),
-      ...info.dynamic.map((spec) => [file, ALL, spec]),
+      ...info.dynamic.flatMap(({ spec, names }) => names.map((wanted) => [file, wanted, spec])),
     ];
   }
   if (info.whole) return [[file, BODY]];

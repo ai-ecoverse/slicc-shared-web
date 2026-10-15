@@ -35,13 +35,31 @@ function dynamic(node) {
   }
 }
 
+function picked(node) {
+  if (node.type !== 'VariableDeclarator' || node.id.type !== 'ObjectPattern') return undefined;
+  const awaited = node.init?.type === 'AwaitExpression' ? node.init.argument : undefined;
+  if (awaited?.type !== 'ImportExpression') return undefined;
+  const spec = literal(awaited.source);
+  const props = node.id.properties;
+  if (spec === undefined || props.some((prop) => prop.type !== 'Property' || prop.computed)) {
+    return undefined;
+  }
+  return { spec, names: props.length > 0 ? props.map((prop) => named(prop.key)) : [BODY] };
+}
+
 function dynamics(ast) {
   const found = [];
   const stack = [ast];
   while (stack.length > 0) {
     const node = stack.pop();
+    const pick = picked(node);
+    if (pick) {
+      found.push(pick);
+      stack.push(node.id);
+      continue;
+    }
     const value = dynamic(node);
-    if (value !== undefined) found.push(value);
+    if (value !== undefined) found.push({ spec: value, names: [ALL] });
     for (const key of Object.keys(node)) {
       const child = node[key];
       if (Array.isArray(child)) {

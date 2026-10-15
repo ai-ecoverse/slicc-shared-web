@@ -322,16 +322,24 @@ const barrels = {
   'test/unit/d.test.mjs': unit('d', "import { d } from '../../src/index.mjs';\nd();"),
   'test/unit/ns.test.mjs': unit('ns', "import * as all from '../../src/index.mjs';\nall.a();"),
   'test/unit/dyn.test.mjs': unit('dyn', "const { b } = await import('../../src/index.mjs');\nb();"),
+  'test/unit/then.test.mjs': unit(
+    'then',
+    "await import('../../src/index.mjs').then((m) => m.b());"
+  ),
+  'test/unit/rest.test.mjs': unit(
+    'rest',
+    "const { b, ...rest } = await import('../../src/index.mjs');\nb(rest);"
+  ),
   'test/unit/open.test.mjs': unit('open', "import { e } from '../../src/open.mjs';\ne();"),
 };
 
-test('a test that imports names from a barrel runs only for the modules that provide those names', async () => {
+test('a test that imports names from a barrel, statically or by destructuring an awaited import(), runs only for the modules that provide them', async () => {
   const dir = await fixture(barrels);
   const expected = {
-    'src/a.mjs': ['a', 'dyn', 'ns'],
-    'src/b.mjs': ['b', 'dyn', 'ns'],
-    'src/c.mjs': ['c', 'dyn', 'ns'],
-    'src/d.mjs': ['d', 'dyn', 'ns'],
+    'src/a.mjs': ['a', 'ns', 'rest', 'then'],
+    'src/b.mjs': ['b', 'dyn', 'ns', 'rest', 'then'],
+    'src/c.mjs': ['c', 'ns', 'rest', 'then'],
+    'src/d.mjs': ['d', 'ns', 'rest', 'then'],
     'src/e.mjs': ['open'],
     'src/f.mjs': ['open'],
   };
