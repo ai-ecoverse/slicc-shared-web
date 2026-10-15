@@ -12,6 +12,9 @@ on:
       chromium:
         type: boolean
         default: true
+      chromium-cache:
+        type: boolean
+        default: true
       test:
         type: string
         default: npm test
@@ -54,6 +57,28 @@ jobs:
           else
             echo "::notice title=Chromium system dependencies::No root on $RUNNER_NAME, so install-deps is skipped and the runner image's system libraries serve Chromium."
           fi
+
+      - name: Playwright browser cache key
+        id: playwright
+        if: inputs.chromium && inputs.chromium-cache
+        run: |
+          if [ "${PLAYWRIGHT_BROWSERS_PATH:-}" = 0 ]; then
+            exit 0
+          fi
+          echo "version=$(node -p "require('./package-lock.json').packages?.['node_modules/playwright-core']?.version ?? ''")" >> "$GITHUB_OUTPUT"
+          if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]; then
+            echo "path=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_OUTPUT"
+          elif [ "$RUNNER_OS" = macOS ]; then
+            echo "path=$HOME/Library/Caches/ms-playwright" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: steps.playwright.outputs.version != ''
+        with:
+          path: ${{ steps.playwright.outputs.path }}
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
 
       - name: Integration tests with coverage, CPU profiles, and screenshots
         env:
