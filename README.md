@@ -4,13 +4,13 @@ Configuration shared by SLICC's web repos ([slicc-bios](https://github.com/ai-ec
 
 | File | What it is | How a repo uses it |
 |---|---|---|
-| `default.json` | Root Renovate preset: automerge on, one dependency per PR, exact pins, 7-day release age (14 for majors, 0 for vulnerability fixes and for our own `@ai-ecoverse` packages and `github.com/ai-ecoverse/*` Go modules, which also jump the PR queue), `<upstream>-slicc.<n>` prereleases (and only those, never past `latest`) for `@ai-ecoverse/fnox` and its `@ai-ecoverse/fnox-*` platform packages, including jumps to a new upstream fnox, one PR each, majors included, for the certified pairs `@ai-ecoverse/slicc-kernel` + `@ai-ecoverse/wasi-pnpm` ("kernel and pnpm") and `@ai-ecoverse/wasm-coreutils` + `@ai-ecoverse/wasm-procps` ("coreutils and procps"), `go mod tidy` after every Go module update (plus import-path rewrites on majors), and a manager for jsDelivr pins inside `src/` | `renovate.json`: `{ "extends": ["github>ai-ecoverse/slicc-shared-web"] }` |
+| `default.json` | Root Renovate preset: automerge on, one dependency per PR, exact pins, 7-day release age (14 for majors, 0 for vulnerability fixes and for our own `@ai-ecoverse` packages and `github.com/ai-ecoverse/*` Go modules, which also jump the PR queue), `<upstream>-<build>` versions of our own `@ai-ecoverse` packages, such as `9.12.0-6`, which Renovate would otherwise skip as prereleases, never past the npm `latest` dist-tag (only `<upstream>-slicc.<n>` ones for `@ai-ecoverse/fnox` and its `@ai-ecoverse/fnox-*` platform packages), one PR each, majors included, for the certified pairs `@ai-ecoverse/slicc-kernel` + `@ai-ecoverse/wasi-pnpm` ("kernel and pnpm") and `@ai-ecoverse/wasm-coreutils` + `@ai-ecoverse/wasm-procps` ("coreutils and procps"), `go mod tidy` after every Go module update (plus import-path rewrites on majors), a manager for jsDelivr pins inside `src/`, and one for [`# renovate:` annotated pins in workflow files](#versions-pinned-in-workflow-files) | `renovate.json`: `{ "extends": ["github>ai-ecoverse/slicc-shared-web"] }` |
 | `.github/workflows/node-ci.yml` | Reusable CI: `npm ci`, lint, Chromium's system libraries, integration tests, hotspots and the stack of every crash dump in the job summary, coverage/profiles/screenshots/crash dumps as artifacts. The browser itself comes from each repo's `pretest` | `jobs: { ci: { uses: ai-ecoverse/slicc-shared-web/.github/workflows/node-ci.yml@vX.Y.Z } }` |
 | `biome.json` | Formatter settings and slicc's strict linter: cognitive complexity ≤ 25, functions ≤ 150 lines, no unused variables or imports, no floating or misused promises, naming conventions, `import type`/`export type`. Test files under `test/` get slicc's test exemptions | `biome.json`: `{ "extends": ["@ai-ecoverse/slicc-shared-web/biome"] }` |
 | `tsconfig.json` | TypeScript base for Node's type stripping | `tsconfig.json`: `{ "extends": "@ai-ecoverse/slicc-shared-web/tsconfig.json", "include": ["src/**/*.ts"] }` |
 | `lefthook.yml` | Pre-commit hooks: Biome, typecheck, no comments, no unit tests in git, AGENTS.md, and diff coverage over [only the unit tests the change reaches](#which-unit-tests-a-commit-runs) | `lefthook.yml`: `extends: [node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml]` |
 | `mcr.config.mjs` | Unit-test coverage for JS and TS sources in `src/` (TS types are stripped first), written to `coverage/unit/lcov.info`. With `SLICC_UNIT_TESTS` set, `node --test` runs only those files ([below](#which-unit-tests-a-commit-runs)) | `test:unit`: `mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --test 'test/unit/**/*.test.mjs'` |
-| `bin/` | `slicc-lint` runs every check below plus Biome and, if the repo has one, `typecheck`. `slicc-lint-comments` runs the [slicc no-comment checker](https://github.com/ai-ecoverse/slicc/tree/main/packages/dev-tools/no-comment) at a pinned commit, allowing AGENTS.md. `slicc-agents-md`, `slicc-no-unit-tests` and `slicc-diff-cover` complete the set, and `slicc-unit-cover` is the diff-coverage hook. `slicc-minidump <file.dmp>...` prints a crash dump's stack, described [below](#crash-dumps) | `lint`: `slicc-lint`, and the hooks above |
+| `bin/` | `slicc-lint` runs every check below plus Biome and, if the repo has one, `typecheck`. `slicc-lint-comments` runs the [slicc no-comment checker](https://github.com/ai-ecoverse/slicc/tree/main/packages/dev-tools/no-comment) at a pinned commit, allowing AGENTS.md and [`# renovate:` annotations](#versions-pinned-in-workflow-files) in workflow and action files. `slicc-agents-md`, `slicc-no-unit-tests` and `slicc-diff-cover` complete the set, and `slicc-unit-cover` is the diff-coverage hook. `slicc-minidump <file.dmp>...` prints a crash dump's stack, described [below](#crash-dumps) | `lint`: `slicc-lint`, and the hooks above |
 | `pnpmfile.mjs` | pnpm's counterpart to the Renovate preset: an `updateConfig` hook that adds `@ai-ecoverse/*` to `minimumReleaseAgeExclude`, so pnpm 12 doesn't hold back our own fresh releases (`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`) while third-party packages keep its age check | in a repo with a pnpm lockfile, as a [config dependency](https://pnpm.io/config-dependencies) in `pnpm-workspace.yaml`: `configDependencies: { '@ai-ecoverse/slicc-shared-web': X.Y.Z }` plus `pnpmfile: node_modules/.pnpm-config/@ai-ecoverse/slicc-shared-web/pnpmfile.mjs` |
 | `harness/` | The CDP integration-test harness, described [below](#integration-test-harness) | `import { launch } from '@ai-ecoverse/slicc-shared-web/harness'`, and `--test-global-setup=node_modules/@ai-ecoverse/slicc-shared-web/harness/global.mjs` |
 
@@ -24,9 +24,45 @@ The hooks expect two scripts in each repo: `test:unit`, which writes `coverage/u
 
 ## Rules every repo follows
 
-- No comments anywhere, and no `.md` files except README.md and AGENTS.md.
+- No comments anywhere, and no `.md` files except README.md and AGENTS.md. The one exception is the `# renovate:` line [above a pinned version in a workflow](#versions-pinned-in-workflow-files).
 - Agent guidance committed to a repo lives in AGENTS.md only, at most 1,000 characters per file. The repo has no CLAUDE.md, not even as a symlink, since Claude reads AGENTS.md. The check covers tracked and untracked files; gitignored local files are personal and stay out of it.
 - Unit tests stay out of git, in a gitignored `test/unit/`. The pre-commit hook requires them to execute every staged line in `src/`.
+
+## Versions pinned in workflow files
+
+Renovate updates `uses:` actions and `package.json` on its own, but not a version written into a workflow's `env:`, a `with:` input or a `run:` line. The preset reads [Renovate's documented annotation](https://docs.renovatebot.com/modules/manager/regex/#advanced-capture) on the line above such a pin, in `.github/workflows/*.yml` and any `action.yml`:
+
+```yaml
+# renovate: datasource=<npm|github-releases|github-tags|go|docker|…> depName=<name> [packageName=…] [versioning=…] [extractVersion=…] [registryUrl=…]
+```
+
+The optional fields go in that order. The version is the first one on the next line after a `:`, an `=` or an `@`, starting with a digit or `v` and a digit. Without `versioning=` it is compared as `semver-coerced`, so `24` and `v2.12.2` work too. One example per shape:
+
+```yaml
+env:
+  # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$
+  ACTIONLINT: 1.7.7
+```
+
+```yaml
+with:
+  # renovate: datasource=github-tags depName=nodejs/node versioning=node
+  node-version: 22.11.0
+```
+
+```yaml
+# renovate: datasource=github-tags depName=owner/action
+- uses: owner/action@v4.1.0
+```
+
+```yaml
+# renovate: datasource=npm depName=playwright-core
+- run: npm i -g playwright-core@1.63.0
+```
+
+When a command needs the version more than once, as actionlint's download does, put it in `env:` once and use the variable, so a single annotated value moves. Renovate's `github-actions` manager already updates ordinary `uses:` refs, by tag or commit SHA, so annotate a `uses:` only when its ref should follow some other datasource.
+
+Pin only where a fixed version is genuinely needed. When a workflow rolls forward to whatever is certified, as with `@ai-ecoverse/slicc-kernel` and its certified siblings, resolve "the newest certified" at run time instead (from the npm `latest` dist-tag, say) rather than pinning and annotating it.
 
 ## Which unit tests a commit runs
 
