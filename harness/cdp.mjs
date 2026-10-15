@@ -116,7 +116,12 @@ export async function connect(url, { exited, tail = () => [] } = {}) {
       const call = pending.get(message.id);
       pending.delete(message.id);
       if (!call) notify(message);
-      else if (message.error) call.reject(new Error(`${call.method}: ${message.error.message}`));
+      else if (message.error)
+        call.reject(
+          Object.assign(new Error(`${call.method}: ${message.error.message}`), {
+            cdp: message.error,
+          })
+        );
       else call.resolve(message.result);
     },
     async () => die(await Promise.race([exited ?? 'socket closed', grace(2000)]))
