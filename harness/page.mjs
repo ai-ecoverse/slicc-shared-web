@@ -207,8 +207,11 @@ export function page(
     within,
     probed: () => Promise.all(probes),
     press,
-    goto: (path) => navigate(`location.assign(${JSON.stringify(new URL(path, server.url).href)})`),
-    reload: () => navigate('location.reload()'),
+    goto: (path) =>
+      navigate(
+        `setTimeout(() => location.assign(${JSON.stringify(new URL(path, server.url).href)}))`
+      ),
+    reload: () => navigate('setTimeout(() => location.reload())'),
     insert: (text) => send('Input.insertText', { text }),
     close: () => cdp.send('Target.closeTarget', { targetId }),
     enter: () => press('Enter'),
