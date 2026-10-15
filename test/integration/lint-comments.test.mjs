@@ -37,6 +37,9 @@ test('a renovate annotation in a workflow or action file passes', async () => {
       '# renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$'
     ),
     '.github/actions/setup/action.yml': workflow('# renovate: datasource=npm depName=@scope/pkg'),
+    '.github/workflows/custom.yml': workflow(
+      '# renovate: datasource=custom.tools depName=tool packageName=org/tool versioning=loose registryUrl=https://example.com'
+    ),
   });
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /^ok: /);
@@ -52,6 +55,17 @@ test('a renovate comment without a datasource and depName fails', async () => {
   const run = await lint({ '.github/workflows/ci.yml': workflow('# renovate: keep this pinned') });
   assert.equal(run.status, 1);
   assert.match(run.stderr, /comment not allowed: # renovate: keep this pinned/);
+});
+
+test('a renovate annotation the manager would not read fails', async () => {
+  for (const annotation of [
+    '# renovate: datasource=npm depName=pkg versoining=loose',
+    '# renovate: datasource=npm depName=pkg versioning=loose packageName=other',
+  ]) {
+    const run = await lint({ '.github/workflows/ci.yml': workflow(annotation) });
+    assert.equal(run.status, 1, annotation);
+    assert.ok(run.stderr.includes(`comment not allowed: ${annotation}`), run.stderr);
+  }
 });
 
 test('a renovate annotation outside workflow and action files fails', async () => {
