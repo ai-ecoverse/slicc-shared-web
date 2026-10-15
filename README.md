@@ -8,9 +8,9 @@ Configuration shared by SLICC's web repos ([slicc-bios](https://github.com/ai-ec
 | `.github/workflows/node-ci.yml` | Reusable CI: `npm ci`, lint, Chromium's system libraries, integration tests, hotspots and the stack of every crash dump in the job summary, coverage/profiles/screenshots/crash dumps as artifacts. The browser itself comes from each repo's `pretest` | `jobs: { ci: { uses: ai-ecoverse/slicc-shared-web/.github/workflows/node-ci.yml@vX.Y.Z } }` |
 | `biome.json` | Formatter settings and slicc's strict linter: cognitive complexity ≤ 25, functions ≤ 150 lines, no unused variables or imports, no floating or misused promises, naming conventions, `import type`/`export type`. Test files under `test/` get slicc's test exemptions | `biome.json`: `{ "extends": ["@ai-ecoverse/slicc-shared-web/biome"] }` |
 | `tsconfig.json` | TypeScript base for Node's type stripping | `tsconfig.json`: `{ "extends": "@ai-ecoverse/slicc-shared-web/tsconfig.json", "include": ["src/**/*.ts"] }` |
-| `lefthook.yml` | Pre-commit hooks: Biome, typecheck, no comments, no unit tests in git, AGENTS.md, diff coverage | `lefthook.yml`: `extends: [node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml]` |
-| `mcr.config.mjs` | Unit-test coverage for JS and TS sources in `src/` (TS types are stripped first), written to `coverage/unit/lcov.info` | `test:unit`: `mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --test 'test/unit/**/*.test.mjs'` |
-| `bin/` | `slicc-lint` runs every check below plus Biome and, if the repo has one, `typecheck`. `slicc-lint-comments` runs the [slicc no-comment checker](https://github.com/ai-ecoverse/slicc/tree/main/packages/dev-tools/no-comment) at a pinned commit, allowing AGENTS.md. `slicc-agents-md`, `slicc-no-unit-tests` and `slicc-diff-cover` complete the set. `slicc-minidump <file.dmp>...` prints a crash dump's stack, described [below](#crash-dumps) | `lint`: `slicc-lint`, and the hooks above |
+| `lefthook.yml` | Pre-commit hooks: Biome, typecheck, no comments, no unit tests in git, AGENTS.md, and diff coverage over [only the unit tests the change reaches](#which-unit-tests-a-commit-runs) | `lefthook.yml`: `extends: [node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml]` |
+| `mcr.config.mjs` | Unit-test coverage for JS and TS sources in `src/` (TS types are stripped first), written to `coverage/unit/lcov.info`. With `SLICC_UNIT_TESTS` set, `node --test` runs only those files ([below](#which-unit-tests-a-commit-runs)) | `test:unit`: `mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --test 'test/unit/**/*.test.mjs'` |
+| `bin/` | `slicc-lint` runs every check below plus Biome and, if the repo has one, `typecheck`. `slicc-lint-comments` runs the [slicc no-comment checker](https://github.com/ai-ecoverse/slicc/tree/main/packages/dev-tools/no-comment) at a pinned commit, allowing AGENTS.md. `slicc-agents-md`, `slicc-no-unit-tests` and `slicc-diff-cover` complete the set, and `slicc-unit-cover` is the diff-coverage hook. `slicc-minidump <file.dmp>...` prints a crash dump's stack, described [below](#crash-dumps) | `lint`: `slicc-lint`, and the hooks above |
 | `pnpmfile.mjs` | pnpm's counterpart to the Renovate preset: an `updateConfig` hook that adds `@ai-ecoverse/*` to `minimumReleaseAgeExclude`, so pnpm 12 doesn't hold back our own fresh releases (`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`) while third-party packages keep its age check | in a repo with a pnpm lockfile, as a [config dependency](https://pnpm.io/config-dependencies) in `pnpm-workspace.yaml`: `configDependencies: { '@ai-ecoverse/slicc-shared-web': X.Y.Z }` plus `pnpmfile: node_modules/.pnpm-config/@ai-ecoverse/slicc-shared-web/pnpmfile.mjs` |
 | `harness/` | The CDP integration-test harness, described [below](#integration-test-harness) | `import { launch } from '@ai-ecoverse/slicc-shared-web/harness'`, and `--test-global-setup=node_modules/@ai-ecoverse/slicc-shared-web/harness/global.mjs` |
 
@@ -27,6 +27,22 @@ The hooks expect two scripts in each repo: `test:unit`, which writes `coverage/u
 - No comments anywhere, and no `.md` files except README.md and AGENTS.md.
 - Agent guidance committed to a repo lives in AGENTS.md only, at most 1,000 characters per file. The repo has no CLAUDE.md, not even as a symlink, since Claude reads AGENTS.md. The check covers tracked and untracked files; gitignored local files are personal and stay out of it.
 - Unit tests stay out of git, in a gitignored `test/unit/`. The pre-commit hook requires them to execute every staged line in `src/`.
+
+## Which unit tests a commit runs
+
+The diff-coverage hook, `slicc-unit-cover`, runs only the unit tests that cover the staged change, then `slicc-diff-cover` on their `coverage/unit/lcov.info`, so every staged line in `src/` still has to run:
+
+- **What counts as changed:** the staged files (`git diff --cached --name-only`). Since `test/unit/` is gitignored, files in it count as changed when they were modified after HEAD last moved (the last commit, checkout or pull).
+- **Which tests run:** every `*.test.*` file in `test/unit/` that is changed, or whose static imports reach a changed file. The import graph is parsed with [acorn](https://github.com/acornjs/acorn), TypeScript after Node's type stripping. It follows `import`, `export … from`, `import()`, `require()` and `new URL(…, import.meta.url)` with literal paths, relative or through the `paths` of `tsconfig.json` (and the files it extends). A path may leave out its extension or name `index`, and `.js` also finds `.ts`. Type-only imports don't count, and nothing is followed into `node_modules/`.
+- **No code staged** (only docs, YAML, JSON or lockfiles): no unit tests and no diff coverage; the hook passes.
+- **A staged file no unit test reaches:** no tests run, its lines show as uncovered, and diff coverage fails as before.
+- **A file that won't parse:** one warning line, then every unit test.
+
+The hook passes the list to the repo's own `test:unit` in `SLICC_UNIT_TESTS` (one path per line). A `--require` preload, which `slicc-unit-cover` and the shared `mcr.config.mjs` add to `NODE_OPTIONS`, makes the `node --test` process run the files on that list that its own patterns match, and none when the list is empty. Without the variable, `npm run test:unit` runs everything as before. To force a full run in the hook:
+
+```sh
+SLICC_UNIT_ALL=1 git commit
+```
 - Integration tests are committed and run in CI.
 
 ## Integration-test harness

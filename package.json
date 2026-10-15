@@ -37,7 +37,8 @@
     "slicc-lint": "bin/slicc-lint.sh",
     "slicc-lint-comments": "bin/slicc-lint-comments.sh",
     "slicc-minidump": "bin/slicc-minidump.mjs",
-    "slicc-no-unit-tests": "bin/slicc-no-unit-tests.sh"
+    "slicc-no-unit-tests": "bin/slicc-no-unit-tests.sh",
+    "slicc-unit-cover": "bin/slicc-unit-cover.mjs"
   },
   "files": [
     "bin",
@@ -47,7 +48,8 @@
     "lefthook.yml",
     "mcr.config.mjs",
     "tsconfig.json",
-    "pnpmfile.mjs"
+    "pnpmfile.mjs",
+    "unit"
   ],
   "scripts": {
     "lint": "bin/slicc-lint.sh && shellcheck bin/*.sh",
@@ -77,5 +79,8 @@
     "playwright-core": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "acorn": "8.19.0"
   }
 }
