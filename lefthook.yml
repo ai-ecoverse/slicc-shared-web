@@ -15,4 +15,4 @@ pre-commit:
       run: npx --no-install slicc-agents-md
     - name: diff coverage
       glob: "src/**.{js,mjs,ts}"
-      run: npm run --silent test:unit && npx --no-install slicc-diff-cover
+      run: npx --no-install slicc-unit-cover
