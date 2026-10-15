@@ -187,7 +187,12 @@ export function page(
   async function navigate(expression) {
     for (let attempt = 0; attempt < 2; attempt++) {
       await evaluate(mark);
-      await send('Runtime.evaluate', { expression });
+      const { frameTree } = await send('Page.getFrameTree');
+      const { executionContextId: contextId } = await send('Page.createIsolatedWorld', {
+        frameId: frameTree.frame.id,
+        worldName: 'slicc-harness-navigate',
+      });
+      await send('Runtime.evaluate', { expression, contextId });
       try {
         await until(fresh);
         return;
@@ -207,8 +212,11 @@ export function page(
     within,
     probed: () => Promise.all(probes),
     press,
-    goto: (path) => navigate(`location.assign(${JSON.stringify(new URL(path, server.url).href)})`),
-    reload: () => navigate('location.reload()'),
+    goto: (path) =>
+      navigate(
+        `setTimeout(() => location.assign(${JSON.stringify(new URL(path, server.url).href)}))`
+      ),
+    reload: () => navigate('setTimeout(() => location.reload())'),
     insert: (text) => send('Input.insertText', { text }),
     close: () => cdp.send('Target.closeTarget', { targetId }),
     enter: () => press('Enter'),
