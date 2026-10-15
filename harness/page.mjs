@@ -187,7 +187,12 @@ export function page(
   async function navigate(expression) {
     for (let attempt = 0; attempt < 2; attempt++) {
       await evaluate(mark);
-      await send('Runtime.evaluate', { expression });
+      const { frameTree } = await send('Page.getFrameTree');
+      const { executionContextId: contextId } = await send('Page.createIsolatedWorld', {
+        frameId: frameTree.frame.id,
+        worldName: 'slicc-harness-navigate',
+      });
+      await send('Runtime.evaluate', { expression, contextId });
       try {
         await until(fresh);
         return;

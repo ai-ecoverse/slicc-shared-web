@@ -16,3 +16,20 @@ test('goto and reload survive a page that navigates before Chrome answers', asyn
   await page.goto('/plain.html?after=reloads');
   assert.equal(await page.evaluate(() => location.search), '?after=reloads');
 });
+
+test('goto and reload work while the page has replaced its own timers', async (t) => {
+  const page = await chrome.page(t);
+  await page.goto('/plain.html');
+  await page.evaluate(() => {
+    window.setTimeout = () => 0;
+    window.queueMicrotask = () => undefined;
+    return true;
+  });
+  await page.reload();
+  await page.evaluate(() => {
+    window.setTimeout = () => 0;
+    return true;
+  });
+  await page.goto('/plain.html?timers=faked');
+  assert.equal(await page.evaluate(() => location.search), '?timers=faked');
+});
