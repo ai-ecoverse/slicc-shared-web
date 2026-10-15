@@ -30,7 +30,7 @@ jobs:
       - name: Workflows
         env:
           # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$
-          ACTIONLINT: 1.7.7
+          ACTIONLINT: 1.7.12
         run: bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v$ACTIONLINT/scripts/download-actionlint.bash") "$ACTIONLINT" && ./actionlint -color
 
       - name: Renovate preset
