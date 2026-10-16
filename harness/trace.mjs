@@ -87,7 +87,9 @@ function mains(events, { names, processes }) {
   for (const event of events) {
     const ours = names.get(`${event.pid}:${event.tid}`) === 'CrRendererMain';
     if (!ours || processes.get(event.pid) !== 'Renderer' || event.ph === 'M') continue;
-    found.set(event.pid, [...(found.get(event.pid) ?? []), event]);
+    const list = found.get(event.pid);
+    if (list) list.push(event);
+    else found.set(event.pid, [event]);
   }
   return [...found].map(([pid, slices]) => main(pid, slices, last));
 }
