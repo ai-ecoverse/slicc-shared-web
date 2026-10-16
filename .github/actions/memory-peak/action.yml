@@ -1,0 +1,10 @@
+name: Memory peak
+description: Writes the job's cgroup memory peak and limit, nproc and the runner name to the step summary and the log, and never fails.
+runs:
+  using: composite
+  steps:
+    - name: Memory peak
+      shell: sh
+      env:
+        SLICC_RUNNER_NAME: ${{ runner.name }}
+      run: sh "$GITHUB_ACTION_PATH/../../../bin/slicc-memory-peak.sh" || true

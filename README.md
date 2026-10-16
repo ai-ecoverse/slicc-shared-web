@@ -10,7 +10,7 @@ Configuration shared by SLICC's web repos ([slicc-bios](https://github.com/ai-ec
 | `tsconfig.json` | TypeScript base for Node's type stripping | `tsconfig.json`: `{ "extends": "@ai-ecoverse/slicc-shared-web/tsconfig.json", "include": ["src/**/*.ts"] }` |
 | `lefthook.yml` | Pre-commit hooks: Biome, typecheck, no comments, no unit tests in git, AGENTS.md, and diff coverage over [only the unit tests the change reaches](#which-unit-tests-a-commit-runs) | `lefthook.yml`: `extends: [node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml]` |
 | `mcr.config.mjs` | Unit-test coverage for JS and TS sources in `src/` (TS types are stripped first), written to `coverage/unit/lcov.info`. With `SLICC_UNIT_TESTS` set, `node --test` runs only those files ([below](#which-unit-tests-a-commit-runs)) | `test:unit`: `mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --test 'test/unit/**/*.test.mjs'` |
-| `bin/` | `slicc-lint` runs every check below plus Biome and, if the repo has one, `typecheck`. `slicc-lint-comments` runs the [slicc no-comment checker](https://github.com/ai-ecoverse/slicc/tree/main/packages/dev-tools/no-comment) at a pinned commit, allowing AGENTS.md and [`# renovate:` annotations](#versions-pinned-in-workflow-files) in workflow and action files. `slicc-agents-md`, `slicc-no-unit-tests` and `slicc-diff-cover` complete the set, and `slicc-unit-cover` is the diff-coverage hook. `slicc-minidump <file.dmp>...` prints a crash dump's stack, described [below](#crash-dumps) | `lint`: `slicc-lint`, and the hooks above |
+| `bin/` | `slicc-lint` runs every check below plus Biome and, if the repo has one, `typecheck`. `slicc-lint-comments` runs the [slicc no-comment checker](https://github.com/ai-ecoverse/slicc/tree/main/packages/dev-tools/no-comment) at a pinned commit, allowing AGENTS.md and [`# renovate:` annotations](#versions-pinned-in-workflow-files) in workflow and action files. `slicc-agents-md`, `slicc-no-unit-tests` and `slicc-diff-cover` complete the set, and `slicc-unit-cover` is the diff-coverage hook. `slicc-minidump <file.dmp>...` prints a crash dump's stack, described [below](#crash-dumps). `slicc-memory-peak` prints the job's [memory peak](#memory-peak) | `lint`: `slicc-lint`, and the hooks above |
 | `pnpmfile.mjs` | pnpm's counterpart to the Renovate preset: an `updateConfig` hook that adds `@ai-ecoverse/*` to `minimumReleaseAgeExclude`, so pnpm 12 doesn't hold back our own fresh releases (`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`) while third-party packages keep its age check | in a repo with a pnpm lockfile, as a [config dependency](https://pnpm.io/config-dependencies) in `pnpm-workspace.yaml`: `configDependencies: { '@ai-ecoverse/slicc-shared-web': X.Y.Z }` plus `pnpmfile: node_modules/.pnpm-config/@ai-ecoverse/slicc-shared-web/pnpmfile.mjs` |
 | `harness/` | The CDP integration-test harness, described [below](#integration-test-harness) | `import { launch } from '@ai-ecoverse/slicc-shared-web/harness'`, and `--test-global-setup=node_modules/@ai-ecoverse/slicc-shared-web/harness/global.mjs` |
 
@@ -63,6 +63,17 @@ with:
 When a command needs the version more than once, as actionlint's download does, put it in `env:` once and use the variable, so a single annotated value moves. Renovate's `github-actions` manager already updates ordinary `uses:` refs, by tag or commit SHA, so annotate a `uses:` only when its ref should follow some other datasource.
 
 Pin only where a fixed version is genuinely needed. When a workflow rolls forward to whatever is certified, as with `@ai-ecoverse/slicc-kernel` and its certified siblings, resolve "the newest certified" at run time instead (from the npm `latest` dist-tag, say) rather than pinning and annotating it.
+
+## Memory peak
+
+The reusable workflow's last step, which runs even when an earlier one failed, writes one line to the log and the job summary. It gives the job's memory peak and limit in MiB, `nproc` and the runner's name, so a runner that later "lost communication" can be compared with the peak of the same job's good runs. The numbers come from cgroup v2 (`memory.peak`, `memory.max`), from the job's own cgroup first and then the root one, or else from cgroup v1 (`memory.max_usage_in_bytes`, `memory.limit_in_bytes`), and the line names the file each one came from. A value it can't read is `n/a`, and the step never fails the job. A repo whose `@ai-ecoverse/slicc-shared-web` predates the script still gets `nproc` and the runner name.
+
+A workflow of its own (not this reusable one) gets the same line from the composite action, as its last step:
+
+```yaml
+      - uses: ai-ecoverse/slicc-shared-web/.github/actions/memory-peak@<tag or sha>
+        if: always()
+```
 
 ## Which unit tests a commit runs
 
