@@ -1,5 +1,9 @@
 name: Certification self-guard
-description: Reject accidental certification-path edits without coordinator approval on the exact PR head
+description: >-
+  Reject accidental certification-path edits without coordinator approval on the exact PR head.
+  Requires Node 24+, contents/checks read and pull-requests write permissions (label invalidation),
+  checkout fetch-depth 0, pull_request types opened/synchronize/reopened/labeled/unlabeled/ready_for_review,
+  and merge_group checks_requested. Merge groups require the merge-commit queue method (two parents).
 inputs:
   paths:
     description: Newline-separated repository-relative globs covering the cert workflow, tools and runners

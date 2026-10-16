@@ -1,3 +1,4 @@
+import { headArrival } from './arrival.mjs';
 import { git } from './changes.mjs';
 
 export function github(repository) {
@@ -28,7 +29,8 @@ export function github(repository) {
     throw new Error('GitHub evidence exceeds pagination limit');
   };
   const approval = async (pull, head, label) => {
-    const missing = (reason) => ({ approved: false, reason, head });
+    const details = { head };
+    const missing = (reason) => ({ approved: false, reason, ...details });
     if (pull.head.sha !== head) return missing('queued or reviewed head is stale');
     if (!pull.labels.some((entry) => entry.name === label)) return missing('approval label absent');
     const timeline = await pages(`issues/${pull.number}/timeline`);
@@ -39,11 +41,13 @@ export function github(repository) {
       .at(-1);
     if (latest?.event !== 'labeled') return missing('approval application event absent or removed');
     const headDate = git('show', '-s', '--format=%cI', head);
-    const headTime = Date.parse(headDate);
+    const arrival = await headArrival(api, head, timeline);
+    Object.assign(details, { headDate, ...arrival });
+    const headTime = Date.parse(arrival.headArrivedAt);
     const labelTime = Date.parse(latest.created_at);
-    if (!Number.isFinite(headTime) || !Number.isFinite(labelTime))
-      throw new Error('approval timestamp evidence invalid');
-    if (labelTime <= headTime) return missing('approval event is not newer than head commit');
+    if (!Number.isFinite(labelTime)) throw new Error('approval timestamp evidence invalid');
+    if (labelTime <= headTime)
+      return missing('approval event is not newer than server-side head arrival');
     const actor = latest.actor?.login;
     if (!/^[\w-]+$/.test(actor ?? '')) return missing('approval labeler missing');
     const permission = await api(`collaborators/${actor}/permission`);
@@ -59,7 +63,7 @@ export function github(repository) {
       permission: permission.role_name ?? permission.permission,
       event: latest.id,
       createdAt: latest.created_at,
-      headDate,
+      ...details,
     };
   };
   const pull = async (number) => {

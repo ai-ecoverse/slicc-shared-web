@@ -84,6 +84,13 @@ async function apiServer(t, pulls, options = {}) {
           },
         ]
       );
+    if (/^commits\/[a-f0-9]+\/check-suites$/.test(route)) {
+      const head = route.split('/')[1];
+      const check_suites = options.noArrival
+        ? []
+        : [{ head_sha: head, created_at: options.arrival ?? headDate }];
+      return send({ total_count: check_suites.length, check_suites });
+    }
     if (route === 'collaborators/coordinator/permission')
       return send({
         permission: options.permission ?? 'admin',
@@ -175,19 +182,38 @@ for (const scenario of [
   },
   { name: 'write permission cannot approve', file: 'scripts/cert/check.mjs', permission: 'write' },
   { name: 'read permission cannot approve', file: 'scripts/cert/check.mjs', permission: 'read' },
+  {
+    name: 'backdated committer date cannot make an older label approve a newly arrived head',
+    file: 'scripts/cert/check.mjs',
+    commitDate: '2000-01-01T00:00:00Z',
+    date: beforeHead,
+  },
+  {
+    name: 'missing server-side arrival evidence is INCOMPLETE',
+    file: 'scripts/cert/check.mjs',
+    noArrival: true,
+    incomplete: true,
+  },
   { name: 'approval before head cannot approve', file: 'scripts/cert/check.mjs', date: beforeHead },
   { name: 'approval exactly at head is not newer', file: 'scripts/cert/check.mjs', date: headDate },
 ]) {
   test(`cert self-guard: ${scenario.name}`, async (t) => {
     const f = fixture(t);
     f.write(scenario.file, scenario.body ?? 'new contents\n');
-    const head = f.commit();
+    const head = f.commit(scenario.commitDate);
     const pr = pull(1, head, f.base);
     if (scenario.labels === false) pr.labels = [];
     const api = await apiServer(t, { 1: pr }, scenario);
     const result = await run(f, api, { action: 'labeled', pull_request: pr });
     assert.equal(result.exit, scenario.pass ? 0 : 1, result.stderr);
-    assert.equal(result.receipt.status, scenario.pass ? 'PASS' : 'FAIL');
+    assert.equal(
+      result.receipt.status,
+      scenario.pass ? 'PASS' : scenario.incomplete ? 'INCOMPLETE' : 'FAIL'
+    );
+    if (scenario.commitDate) {
+      assert.match(result.receipt.members[0].headDate, /^2000-/);
+      assert.equal(result.receipt.members[0].headArrivedAt, headDate);
+    }
     if (!scenario.pass) assert.match(result.stderr, /cert-review: needs coordinator review/);
     assert.equal(
       result.receipt.residual,
@@ -290,6 +316,41 @@ test('cert self-guard merge group binds actual ancestry heads and fails one unap
   assert.equal((await run(f, api, event)).receipt.status, 'PASS');
   members[1].head.sha = f.base;
   assert.equal((await run(f, api, event)).receipt.status, 'INCOMPLETE');
+});
+
+test('cert self-guard uses a server-side matching head-push event when check suites are unavailable', async (t) => {
+  const f = fixture(t);
+  f.write('scripts/cert/check.mjs', 'change\n');
+  const head = f.commit('2000-01-01T00:00:00Z');
+  const pr = pull(1, head, f.base);
+  const api = await apiServer(
+    t,
+    { 1: pr },
+    {
+      noArrival: true,
+      timelines: {
+        1: [
+          {
+            id: 9,
+            event: 'head_ref_force_pushed',
+            after_commit: { sha: head },
+            created_at: headDate,
+          },
+          {
+            id: 10,
+            event: 'labeled',
+            label: { name: 'cert-review-approved' },
+            actor: { login: 'coordinator' },
+            created_at: afterHead,
+          },
+        ],
+      },
+    }
+  );
+  const result = await run(f, api, { pull_request: pr });
+  assert.equal(result.receipt.status, 'PASS');
+  assert.equal(result.receipt.members[0].headArrivalEvent, 9);
+  assert.equal(result.receipt.members[0].headArrivedAt, headDate);
 });
 
 test('cert self-guard merge group refuses non-merge unexplained commits', async (t) => {
