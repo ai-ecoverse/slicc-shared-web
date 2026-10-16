@@ -20,14 +20,48 @@ async function inspect(api, pull, base, head, globs, synchronized = false, diffH
   const touched = touchedPaths(paths, globs);
   const member = { pr: pull.number, base, head, paths, touched, approved: false };
   if (pull.head.sha !== head) throw new Error(`PR #${pull.number} head is stale`);
-  if (synchronized) {
-    if (pull.labels.some((entry) => entry.name === receipt.label)) {
-      await api.api(`issues/${pull.number}/labels/${encodeURIComponent(receipt.label)}`, 'DELETE');
-      member.removedApproval = true;
+  let timing;
+  if (synchronized && pull.labels.some((entry) => entry.name === receipt.label)) {
+    try {
+      timing = await api.freshness(pull, head, receipt.label);
+    } catch (error) {
+      member.reason = `approval timing unavailable; clearing label on synchronize: ${error.message}`;
+      try {
+        await api.api(
+          `issues/${pull.number}/labels/${encodeURIComponent(receipt.label)}`,
+          'DELETE'
+        );
+        member.removedApproval = true;
+      } catch (removal) {
+        member.reason += `; removal failed: ${removal.message}`;
+      }
+      member.status = 'INCOMPLETE';
+      return member;
     }
-    member.reason = 'synchronize requires a fresh coordinator approval';
-  } else if (touched.length) {
-    Object.assign(member, await api.approval(pull, head, receipt.label));
+    Object.assign(member, timing);
+    if (!timing.fresh) {
+      try {
+        await api.api(
+          `issues/${pull.number}/labels/${encodeURIComponent(receipt.label)}`,
+          'DELETE'
+        );
+        member.removedApproval = true;
+      } catch (error) {
+        return { ...member, status: 'INCOMPLETE', reason: error.message };
+      }
+      member.reason =
+        'synchronize cleared approval that is not newer than the current head arrival';
+      member.status = touched.length ? 'FAIL' : 'PASS';
+      return member;
+    }
+    member.keptApproval = true;
+  }
+  if (touched.length) {
+    try {
+      Object.assign(member, await api.approval(pull, head, receipt.label, timing));
+    } catch (error) {
+      return { ...member, status: 'INCOMPLETE', reason: error.message };
+    }
   }
   member.status = !touched.length || member.approved ? 'PASS' : 'FAIL';
   return member;

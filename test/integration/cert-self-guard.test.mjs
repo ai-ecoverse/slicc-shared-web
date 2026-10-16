@@ -20,7 +20,11 @@ const selfPass =
 function fixture(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'slicc-self-guard-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+  const git = (...args) =>
+    execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
   git('init', '--quiet', '--initial-branch=main');
   git('config', 'user.name', 'Fixture');
   git('config', 'user.email', 'fixture@example.invalid');
@@ -30,10 +34,14 @@ function fixture(t) {
   };
   const commit = (date = headDate) => {
     git('add', '.');
-    execFileSync('git', ['commit', '--quiet', '-m', 'fixture change'], {
-      cwd: dir,
-      env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
-    });
+    execFileSync(
+      'git',
+      ['-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'fixture change'],
+      {
+        cwd: dir,
+        env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      }
+    );
     return git('rev-parse', 'HEAD');
   };
   write('README.md', 'base\n');
@@ -69,8 +77,10 @@ async function apiServer(t, pulls, options = {}) {
     const number = Number(route.split('/')[1]);
     if (/^pulls\/\d+$/.test(route)) return send(pulls[number]);
     if (/^issues\/\d+\/labels\//.test(route) && req.method === 'DELETE') {
+      if (options.deleteStatus && options.deleteStatus !== 204)
+        return send(null, options.deleteStatus);
       pulls[number].labels = [];
-      return send(null, options.deleteStatus ?? 204);
+      return send(null, 204);
     }
     if (/^issues\/\d+\/timeline$/.test(route))
       return send(
@@ -92,10 +102,13 @@ async function apiServer(t, pulls, options = {}) {
       return send({ total_count: check_suites.length, check_suites });
     }
     if (route === 'collaborators/coordinator/permission')
-      return send({
-        permission: options.permission ?? 'admin',
-        role_name: options.role ?? options.permission ?? 'admin',
-      });
+      return send(
+        {
+          permission: options.permission ?? 'admin',
+          role_name: options.role ?? options.permission ?? 'admin',
+        },
+        options.permissionStatus ?? 200
+      );
     if (/^commits\/[a-f0-9]+\/pulls$/.test(route))
       return send(Object.values(pulls).filter((entry) => entry.head.sha === route.split('/')[1]));
     return send({ error: `unexpected ${route}` }, 404);
@@ -242,10 +255,12 @@ test('cert self-guard approve then push removes approval and re-blocks, even if 
   f.write('scripts/cert/check.mjs', 'first change\n');
   const head = f.commit();
   const pr = pull(1, head, f.base);
-  const api = await apiServer(t, { 1: pr });
+  const timing = { arrival: headDate };
+  const api = await apiServer(t, { 1: pr }, timing);
   assert.equal((await run(f, api, { action: 'labeled', pull_request: pr })).receipt.status, 'PASS');
   f.write('scripts/cert/check.mjs', 'later change\n');
   pr.head.sha = f.commit('2026-10-16T12:02:00Z');
+  timing.arrival = '2026-10-16T12:02:00Z';
   const result = await run(f, api, { action: 'synchronize', pull_request: pr });
   assert.equal(result.receipt.status, 'FAIL');
   assert.deepEqual(pr.labels, []);
@@ -255,6 +270,52 @@ test('cert self-guard approve then push removes approval and re-blocks, even if 
     )
   );
 });
+
+for (const scenario of [
+  { name: 'approval after push but before delayed synchronize is kept and passes', pass: true },
+  { name: 'approval before push is removed and fails', date: beforeHead, removed: true },
+  {
+    name: 'unknown arrival removes approval and is INCOMPLETE',
+    noArrival: true,
+    removed: true,
+    incomplete: true,
+  },
+  { name: 'newer label stays but write permission cannot approve', permission: 'write' },
+  {
+    name: 'newer label stays when permission lookup fails',
+    permissionStatus: 403,
+    incomplete: true,
+  },
+]) {
+  test(`cert self-guard synchronize race: ${scenario.name}`, async (t) => {
+    const f = fixture(t);
+    f.write('scripts/cert/check.mjs', 'change\n');
+    const head = f.commit();
+    const pr = pull(1, head, f.base);
+    const api = await apiServer(t, { 1: pr }, scenario);
+    const result = await run(f, api, { action: 'synchronize', pull_request: pr });
+    assert.equal(
+      result.receipt.status,
+      scenario.pass ? 'PASS' : scenario.incomplete ? 'INCOMPLETE' : 'FAIL'
+    );
+    assert.equal(
+      api.calls.some((call) => call.method === 'DELETE'),
+      !!scenario.removed
+    );
+    if (scenario.removed) {
+      assert.deepEqual(pr.labels, []);
+      assert.equal(result.receipt.members[0].removedApproval, true);
+    } else {
+      assert.deepEqual(pr.labels, [{ name: 'cert-review-approved' }]);
+      assert.equal(result.receipt.members[0].keptApproval, true);
+    }
+    if (scenario.noArrival)
+      assert.match(
+        result.receipt.members[0].reason,
+        /timing unavailable.*head arrival unavailable/
+      );
+  });
+}
 
 test('cert self-guard removed approval and failed automatic removal cannot pass', async (t) => {
   const f = fixture(t);
@@ -267,7 +328,7 @@ test('cert self-guard removed approval and failed automatic removal cannot pass'
     { timelines: { 1: [{ id: 11, event: 'unlabeled', label: { name: 'cert-review-approved' } }] } }
   );
   assert.equal((await run(f, removed, { pull_request: pr })).receipt.status, 'FAIL');
-  const denied = await apiServer(t, { 1: pr }, { deleteStatus: 403 });
+  const denied = await apiServer(t, { 1: pr }, { deleteStatus: 403, date: beforeHead });
   assert.equal(
     (await run(f, denied, { action: 'synchronize', pull_request: pr })).receipt.status,
     'INCOMPLETE'
