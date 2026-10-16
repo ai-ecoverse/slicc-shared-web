@@ -112,3 +112,17 @@ jobs:
             coverage/
             artifacts/
           if-no-files-found: ignore
+
+      - name: Memory peak
+        if: always()
+        continue-on-error: true
+        env:
+          SLICC_RUNNER_NAME: ${{ runner.name }}
+        run: |
+          script=node_modules/.bin/slicc-memory-peak
+          [ -x "$script" ] || script=bin/slicc-memory-peak.sh
+          if [ -f "$script" ]; then
+            sh "$script" || true
+          else
+            echo "memory peak n/a (no slicc-memory-peak), nproc $(nproc 2>/dev/null || echo n/a), runner $SLICC_RUNNER_NAME" | tee -a "$GITHUB_STEP_SUMMARY" || true
+          fi
