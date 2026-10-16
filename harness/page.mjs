@@ -1,5 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import { flights } from './flight.mjs';
+import { runner } from './run.mjs';
 import { sleep } from './util.mjs';
 
 const masks = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
@@ -153,6 +154,23 @@ export function page(
     return run(fn, args, timeout);
   }
 
+  async function expression(source, ms) {
+    const { result, exceptionDetails } = await send(
+      'Runtime.evaluate',
+      { expression: source, awaitPromise: true, returnByValue: true },
+      ms
+    );
+    if (exceptionDetails) throw new Error(exceptionDetails.exception?.description);
+    return decoded(result);
+  }
+
+  const job = runner({
+    expression,
+    timeout,
+    pending: () => flying.pending(),
+    capture: stall ? capture : undefined,
+  });
+
   async function within(ms, fn, ...args) {
     const deadline = Date.now() + ms;
     let last;
@@ -208,6 +226,7 @@ export function page(
     dispose,
     send,
     evaluate,
+    run: job,
     until,
     within,
     probed: () => Promise.all(probes),
