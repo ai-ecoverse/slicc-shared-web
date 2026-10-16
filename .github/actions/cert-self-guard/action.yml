@@ -1,0 +1,41 @@
+name: Certification self-guard
+description: >-
+  Reject accidental certification-path edits without coordinator approval on the exact PR head.
+  Requires Node 24+, contents/checks read and pull-requests write permissions (label invalidation),
+  checkout fetch-depth 0, pull_request types opened/synchronize/reopened/labeled/unlabeled/ready_for_review,
+  and merge_group checks_requested. Merge groups require the merge-commit queue method (two parents).
+inputs:
+  paths:
+    description: Newline-separated repository-relative globs covering the cert workflow, tools and runners
+    required: false
+    default: |
+      .github/workflows/cert*.yml
+      .github/workflows/cert*.yaml
+      scripts/cert/**
+      tools/cert-review/**
+      .github/actions/cert-self-guard/**
+  approval-label:
+    description: Label reserved for lane coordinators with admin or maintain permission
+    required: false
+    default: cert-review-approved
+outputs:
+  status:
+    description: PASS, FAIL or INCOMPLETE
+    value: ${{ steps.guard.outputs.status }}
+  touched:
+    description: Whether certification paths changed
+    value: ${{ steps.guard.outputs.touched }}
+  receipt:
+    description: JSON receipt binding the result to exact heads and approval events
+    value: ${{ steps.guard.outputs.receipt }}
+runs:
+  using: composite
+  steps:
+    - id: guard
+      shell: bash
+      env:
+        CERT_GUARD_ACTION_PATH: ${{ github.action_path }}
+        CERT_GUARD_PATHS: ${{ inputs.paths }}
+        CERT_GUARD_APPROVAL_LABEL: ${{ inputs.approval-label }}
+        GH_TOKEN: ${{ github.token }}
+      run: node "$CERT_GUARD_ACTION_PATH/guard.mjs"

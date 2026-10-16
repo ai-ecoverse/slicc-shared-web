@@ -75,6 +75,63 @@ A workflow of its own (not this reusable one) gets the same line from the compos
         if: always()
 ```
 
+## Certification self-guard
+
+`.github/actions/cert-self-guard` is a shared composite action for PR certification lanes. It inspects the PR's diff against its base (both paths of a rename included) and rejects certification-path edits with `cert-review: needs coordinator review` unless `cert-review-approved` was applied after the current head **arrived at GitHub** by a user whose GitHub repository permission is **admin or maintain**. The arrival time is the earliest `created_at` from `commits/{sha}/check-suites`, or, if unavailable, the PR timeline's latest matching head-push event. If neither server-side source is available, approval is `INCOMPLETE`. The client-controlled committer date is retained only as information in the receipt; it never authorizes approval. Write permission is not enough. It reads the label application from the issue timeline and checks the labeler's current permission through the API, rather than trusting the event sender or the label's presence alone. Removing and reapplying the label replaces the approval event; an old application cannot qualify. Missing git history, API errors, stale heads, ambiguous group membership and truncated timeline evidence fail closed as `INCOMPLETE`.
+
+The guard's assumption is that **workers never apply or remove `cert-review-approved`; only a lane coordinator does, after reading the certification-path change**. The permission API cannot distinguish a coordinator from a worker: all agents act as `trieloff`, an admin. Coordinator-only labelling is therefore a **procedural assumption**, not something the permission check enforces. On `synchronize`, the guard itself removes that label automatically and blocks a touched PR until the coordinator approves its new head. A failed removal is red. This automated invalidation is not permission for workers to change the label manually. A re-run of the original synchronize event still requires fresh approval; run the subsequent label event instead.
+
+On `merge_group`, the guard walks the first-parent merge ancestry from `head_sha` back to `base_sha`, resolves each merge's second parent to exactly one open PR, and inspects that member's actual merged delta. It checks approval against that queued head, not just whatever head the PR API currently returns. A moved head, an unexplained non-merge commit or an unapproved certification-path PR makes the group red. This assumes the queue's **merge-commit method** with two-parent synthetic merges; squash/rebase or any other unexplained ancestry fails closed. It does not call an LLM or run candidate code.
+
+Callers use **one external `uses:` line pinned to a full commit SHA**, not a local action path or the PR's checkout. The composite executes its script from `github.action_path`, the downloaded pinned action directory. Each lane supplies one newline-separated `paths` list covering its certification workflows, reviewer/classifier/record tools and runners. The default list covers `.github/workflows/cert*.yml`, `.github/workflows/cert*.yaml`, `scripts/cert/**`, `tools/cert-review/**` and `.github/actions/cert-self-guard/**`. Inclusive repository-relative globs use Node's `path.matchesGlob`; negations are not supported. Include the caller's **entire cert workflow**, so changing the guard's own `uses:` line or pinned SHA is itself guarded. An empty or invalid list fails closed.
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: write
+
+steps:
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    with:
+      ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.head_sha }}
+      fetch-depth: 0
+      persist-credentials: false
+  - name: Fetch the exact trees to inspect, without executing them
+    env:
+      HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+      BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+    run: git fetch --no-tags origin "$BASE" "$HEAD"
+  - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+    with:
+      node-version: 24
+  - uses: ai-ecoverse/slicc-shared-web/.github/actions/cert-self-guard@<full-commit-sha>
+    with:
+      paths: |
+        .github/workflows/cert*.yml
+        .github/workflows/cert*.yaml
+        scripts/cert/**
+        tools/cert-review/**
+        scripts/cert-runner/**
+      approval-label: cert-review-approved
+```
+
+The caller uses the triggers shown above and runs this metadata-only step separately from candidate execution. It needs Node 24+, **`actions/checkout` with `fetch-depth: 0`** (for merge-base and group ancestry), complete local git objects for the exact base/head/group ancestry, `contents: read`, **`checks: read`** for server-side head-arrival evidence and **`pull-requests: write`** for automatic label invalidation. A failed DELETE is red `INCOMPLETE`; the integration suite covers a permission-denied DELETE. Use GitHub-hosted isolated runners for candidate build/test jobs, with read-only tokens, no secrets and `persist-credentials: false`. The guard neither executes their code nor needs review, signing or publishing credentials. No CODEOWNERS or code-owner ruleset requirement is imposed by this action.
+
+Outputs are `status` (`PASS`, `FAIL`, `INCOMPLETE`), `touched` and a structured JSON `receipt` containing the exact head(s), changed/guarded paths, approval event, labeler permission and reason. Every non-PASS result exits nonzero. The receipt and job summary include this precise limitation:
+
+> self-guard catches accidental cert-path edits; not enforced against a deliberate rewrite of the workflow
+
+A `pull_request` workflow can be deliberately rewritten to skip the guard, change its inputs or fabricate a status. This is an accidental-self-certification guard, **not** an organization-required-workflow security boundary. Pinning the action stops accidental use of the PR's implementation but does not force a candidate-controlled workflow to call it. Ruleset changes or an organization-required workflow are a separate owner decision.
+
+The committed public CLI integration regressions use real git repositories and a fake GitHub HTTP API. Run only this non-browser suite locally with `node --test test/integration/cert-self-guard.test.mjs`; CI also runs it with the full integration suite. It covers touched/untouched changes, a self-passing workflow/pin edit, rename paths, label timing against **server-side arrival** (including a backdated committer date), permission, approval followed by a push, API refusal and groups containing an unapproved or stale PR.
+
 ## Which unit tests a commit runs
 
 The diff-coverage hook, `slicc-unit-cover`, runs only the unit tests that cover the staged change, then `slicc-diff-cover` on their `coverage/unit/lcov.info`, so every staged line in `src/` still has to run:
