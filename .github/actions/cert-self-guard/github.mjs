@@ -28,9 +28,9 @@ export function github(repository) {
     }
     throw new Error('GitHub evidence exceeds pagination limit');
   };
-  const approval = async (pull, head, label) => {
+  const freshness = async (pull, head, label) => {
     const details = { head };
-    const missing = (reason) => ({ approved: false, reason, ...details });
+    const missing = (reason) => ({ fresh: false, reason, ...details });
     if (pull.head.sha !== head) return missing('queued or reviewed head is stale');
     if (!pull.labels.some((entry) => entry.name === label)) return missing('approval label absent');
     const timeline = await pages(`issues/${pull.number}/timeline`);
@@ -48,7 +48,19 @@ export function github(repository) {
     if (!Number.isFinite(labelTime)) throw new Error('approval timestamp evidence invalid');
     if (labelTime <= headTime)
       return missing('approval event is not newer than server-side head arrival');
-    const actor = latest.actor?.login;
+    return {
+      fresh: true,
+      actor: latest.actor?.login,
+      event: latest.id,
+      createdAt: latest.created_at,
+      ...details,
+    };
+  };
+  const approval = async (pull, head, label, timing) => {
+    const details = timing ?? (await freshness(pull, head, label));
+    const missing = (reason) => ({ ...details, approved: false, reason });
+    if (!details.fresh) return missing(details.reason);
+    const actor = details.actor;
     if (!/^[\w-]+$/.test(actor ?? '')) return missing('approval labeler missing');
     const permission = await api(`collaborators/${actor}/permission`);
     if (
@@ -57,13 +69,9 @@ export function github(repository) {
     )
       return missing('approval labeler lacks admin or maintain permission');
     return {
-      approved: true,
-      head,
-      actor,
-      permission: permission.role_name ?? permission.permission,
-      event: latest.id,
-      createdAt: latest.created_at,
       ...details,
+      approved: true,
+      permission: permission.role_name ?? permission.permission,
     };
   };
   const pull = async (number) => {
@@ -90,5 +98,5 @@ export function github(repository) {
     if (matches.length !== 1) throw new Error(`cannot uniquely resolve queued PR at ${head}`);
     return pull(matches[0].number);
   };
-  return { api, pull, associated, approval };
+  return { api, pull, associated, approval, freshness };
 }
