@@ -10,13 +10,14 @@ if [ ! -f "$dir/check.mjs" ]; then
 fi
 report=$(node "$dir/check.mjs" --force "$@" 2>&1) || true
 if [ -z "$report" ]; then
-  printf 'slicc-lint-comments: the no-comment checker produced no report\n' >&2
+  printf 'slicc-lint-comments: FAIL the no-comment checker produced no report\n' >&2
   exit 1
 fi
 renovate='^(\.github/workflows/[^/:]+|(.+/)?action)\.ya?ml:[0-9]+: comment not allowed: # renovate: datasource=[a-z.-]+ depName=[^ ]+( packageName=[^ ]+)?( versioning=[^ ]+)?( extractVersion=[^ ]+)?( registryUrl=[^ ]+)?$'
 rest=$(printf '%s\n' "$report" | grep -vE '^ok: |^(.+/)?AGENTS\.md: documentation file is not allowed' | grep -vE "$renovate" || true)
 if [ -n "$rest" ]; then
   printf '%s\n' "$rest" >&2
+  printf 'slicc-lint-comments: FAIL\n' >&2
   exit 1
 fi
-printf 'ok: no comments besides # renovate: annotations, and no documentation besides README.md and AGENTS.md\n'
+printf 'slicc-lint-comments: PASS no comments besides # renovate: annotations, and no documentation besides README.md and AGENTS.md\n'
