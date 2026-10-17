@@ -91,13 +91,13 @@ async function sample(cdp, pauses, [sessionId, target], dir, tag, profiling) {
   return `${label(target)}: ${state}, profile ${name}`;
 }
 
-function collect(send, profiling) {
-  const stop = profiling ? send('Profiler.stop') : {};
-  const taken = Promise.all([send('Profiler.takePreciseCoverage'), stop]);
-  return Promise.race([taken, sleep(3000)]).then(
-    (answer) => answer ?? [{}, {}],
-    () => [{}, {}]
-  );
+function collect(send, profiling, collecting) {
+  const asked = (on, method) => (on ? send(method).catch(() => ({})) : {});
+  const taken = Promise.all([
+    asked(collecting, 'Profiler.takePreciseCoverage'),
+    asked(profiling, 'Profiler.stop'),
+  ]);
+  return Promise.race([taken, sleep(3000)]).then((answer) => answer ?? [{}, {}]);
 }
 
 function held(pauses) {
@@ -171,7 +171,8 @@ export function commands({ type, url }, { coverage = ['/'], exits = new Map(), p
 }
 
 export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), profiling } = {}) {
-  const watching = coverage.length > 0 || Boolean(profiling);
+  const collecting = coverage.length > 0;
+  const watching = collecting || Boolean(profiling);
   const sessions = new Map();
   const pauses = new Map();
   const parents = new Map();
@@ -183,9 +184,9 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
   async function dump(sessionId, target, restart) {
     const current = run;
     const send = (method) => cdp.send(method, {}, sessionId);
-    const [{ result }, { profile }] = await collect(send, profiling);
-    if (!(result && current)) return;
-    retain(current.scripts, result.filter(ours));
+    const [{ result }, { profile }] = await collect(send, profiling, collecting);
+    if (!current) return;
+    retain(current.scripts, (result ?? []).filter(ours));
     if (!profile) return;
     if (restart) send('Profiler.start').catch(ignore);
     current.profiles += 1;

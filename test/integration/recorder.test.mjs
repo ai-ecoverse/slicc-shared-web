@@ -50,6 +50,9 @@ test('with coverage on, each worker exit dumps its coverage', async (t) => {
     if (method === 'Debugger.paused') pauses += 1;
   });
   assert.equal((await workers(counted, t, 40)).length, 40);
+  for (const deadline = Date.now() + 10_000; pauses < 40 && Date.now() < deadline; ) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   off();
   assert.ok(pauses >= 40, `${pauses} exit pauses`);
 });
