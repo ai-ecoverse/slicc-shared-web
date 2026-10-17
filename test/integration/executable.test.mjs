@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
-import { readdir } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { test } from 'node:test';
+import { join } from 'node:path';
+import { after, test } from 'node:test';
 import { launch } from '../../harness/index.mjs';
+
+const own = await mkdtemp(join(tmpdir(), 'executable-'));
+process.env.TMPDIR = own;
+after(() => rm(own, { recursive: true, force: true }));
 
 const ours = async () =>
   new Set(

@@ -2,12 +2,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, relative } from 'node:path';
 import { cwd } from 'node:process';
 import { pathToFileURL } from 'node:url';
+import Util from 'monocart-coverage-reports/util';
 import { CRASHED } from './cdp.mjs';
 import { trace } from './trace.mjs';
 import { bounded, ignore, raw, samples, sleep, TIMED_OUT } from './util.mjs';
 
 const profiled = new Set(['page', 'worker', 'service_worker', 'shared_worker']);
-const nested = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
 const sampling = [['Profiler.setSamplingInterval', { interval: 100 }], ['Profiler.start']];
 const unload = "addEventListener('beforeunload', () => { debugger; })";
 
@@ -91,13 +91,13 @@ async function sample(cdp, pauses, [sessionId, target], dir, tag, profiling) {
   return `${label(target)}: ${state}, profile ${name}`;
 }
 
-function collect(send, profiling) {
-  const stop = profiling ? send('Profiler.stop') : {};
-  const taken = Promise.all([send('Profiler.takePreciseCoverage'), stop]);
-  return Promise.race([taken, sleep(3000)]).then(
-    (answer) => answer ?? [{}, {}],
-    () => [{}, {}]
-  );
+function collect(send, profiling, collecting) {
+  const asked = (on, method) => (on ? send(method).catch(() => ({})) : {});
+  const taken = Promise.all([
+    asked(collecting, 'Profiler.takePreciseCoverage'),
+    asked(profiling, 'Profiler.stop'),
+  ]);
+  return Promise.race([taken, sleep(3000)]).then((answer) => answer ?? [{}, {}]);
 }
 
 function held(pauses) {
@@ -131,7 +131,48 @@ function contextOf(sessions, parents, sessionId) {
   return undefined;
 }
 
+export function retain(scripts, result) {
+  for (const script of result) {
+    const prev = scripts.get(script.url);
+    const functions = prev ? Util.mergeV8Coverage([prev, script]).functions : script.functions;
+    scripts.set(script.url, { ...(prev ?? script), functions });
+  }
+  return scripts;
+}
+
+export function commands({ type, url }, { coverage = ['/'], exits = new Map(), profiling } = {}) {
+  const collecting = coverage.length > 0;
+  const watching = collecting || Boolean(profiling);
+  const nested = { autoAttach: true, waitForDebuggerOnStart: watching, flatten: true };
+  const list = [];
+  if (profiled.has(type)) {
+    list.push(['Runtime.enable']);
+    if (watching) list.push(['Profiler.enable']);
+    if (collecting) {
+      list.push(['Profiler.startPreciseCoverage', { callCount: true, detailed: true }]);
+    }
+    list.push(['Target.setAutoAttach', nested]);
+    if (profiling) list.push(...sampling);
+  }
+  const lines = type === 'worker' && watching ? exits.get(pathOf(url)) : undefined;
+  if (lines) {
+    list.push(
+      ['Debugger.enable'],
+      ...lines.map((lineNumber) => ['Debugger.setBreakpointByUrl', { url, lineNumber }])
+    );
+  }
+  if (type === 'page') {
+    list.push(['Network.enable'], ['Page.enable']);
+    if (watching) {
+      list.push(['Debugger.enable'], ['Page.addScriptToEvaluateOnNewDocument', { source: unload }]);
+    }
+  }
+  return list;
+}
+
 export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), profiling } = {}) {
+  const collecting = coverage.length > 0;
+  const watching = collecting || Boolean(profiling);
   const sessions = new Map();
   const pauses = new Map();
   const parents = new Map();
@@ -143,18 +184,21 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
   async function dump(sessionId, target, restart) {
     const current = run;
     const send = (method) => cdp.send(method, {}, sessionId);
-    const [{ result }, { profile }] = await collect(send, profiling);
-    if (!(result && current)) return;
-    current.scripts.push(...result.filter(ours));
+    const [{ result }, { profile }] = await collect(send, profiling, collecting);
+    if (!current) return;
+    retain(current.scripts, (result ?? []).filter(ours));
     if (!profile) return;
     if (restart) send('Profiler.start').catch(ignore);
     current.profiles += 1;
     selfTimes(profile, server, current.self);
     const name = `${String(current.profiles).padStart(3, '0')}-${label(target)}.cpuprofile`;
-    await writeFile(new URL(name, current.dir), JSON.stringify(profile));
+    current.writes.push(
+      writeFile(new URL(name, current.dir), JSON.stringify(profile)).catch(ignore)
+    );
   }
 
   async function checkpoint() {
+    if (!watching) return;
     const current = [...sessions].filter(([, target]) => target.browserContextId === run?.context);
     await Promise.all(current.map(([sessionId, target]) => dump(sessionId, target, true)));
   }
@@ -170,38 +214,9 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
     return tabs.get(targetId);
   }
 
-  function commands({ type, url }) {
-    const list = [];
-    if (profiled.has(type)) {
-      list.push(
-        ['Runtime.enable'],
-        ['Profiler.enable'],
-        ['Profiler.startPreciseCoverage', { callCount: true, detailed: true }],
-        ['Target.setAutoAttach', nested]
-      );
-      if (profiling) list.push(...sampling);
-    }
-    const lines = type === 'worker' ? exits.get(pathOf(url)) : undefined;
-    if (lines) {
-      list.push(
-        ['Debugger.enable'],
-        ...lines.map((lineNumber) => ['Debugger.setBreakpointByUrl', { url, lineNumber }])
-      );
-    }
-    if (type === 'page') {
-      list.push(
-        ['Network.enable'],
-        ['Debugger.enable'],
-        ['Page.enable'],
-        ['Page.addScriptToEvaluateOnNewDocument', { source: unload }]
-      );
-    }
-    return list;
-  }
-
   function attach({ sessionId, targetInfo, waitingForDebugger }) {
     if (profiled.has(targetInfo.type)) sessions.set(sessionId, targetInfo);
-    const list = commands(targetInfo);
+    const list = commands(targetInfo, { coverage, exits, profiling });
     if (waitingForDebugger) list.push(['Runtime.runIfWaitingForDebugger']);
     const ready = Promise.all(
       list.map(([method, params]) => cdp.send(method, params, sessionId).catch(ignore))
@@ -283,14 +298,25 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
   }
 
   function begin(context, dir, name) {
-    run = { context, dir, name, scripts: [], console: early.splice(0), profiles: 0, self: {} };
+    run = {
+      context,
+      dir,
+      name,
+      scripts: new Map(),
+      writes: [],
+      console: early.splice(0),
+      profiles: 0,
+      self: {},
+    };
   }
 
   async function end() {
     await checkpoint();
     const current = run;
     run = null;
-    const entries = await Promise.all(current.scripts.map((script) => entry(server, script)));
+    await Promise.all(current.writes);
+    const scripts = [...current.scripts.values()];
+    const entries = await Promise.all(scripts.map((script) => entry(server, script)));
     const found = { profiles: current.profiles, self: current.self };
     await mkdir(raw, { recursive: true });
     await mkdir(samples, { recursive: true });
