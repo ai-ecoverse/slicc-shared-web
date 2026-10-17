@@ -7,7 +7,6 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
-  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
@@ -78,10 +77,6 @@ async function fixture(files, extra = {}) {
   const cover = join(dir, 'node_modules', '.bin', 'slicc-diff-cover');
   writeFileSync(cover, '#!/bin/sh\ncp coverage/unit/lcov.info covered.txt\n');
   chmodSync(cover, 0o755);
-  const past = new Date(Date.now() - 3_600_000);
-  for (const path of Object.keys(files)) {
-    if (path.startsWith('test/unit/')) utimesSync(join(dir, path), past, past);
-  }
   git(dir, 'init', '-q');
   git(dir, 'add', '-A');
   git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init', '--no-verify');
@@ -156,16 +151,50 @@ test('a dynamically imported file runs the test that imports it', async () => {
   assert.deepEqual(run.ran, ['lazy']);
 });
 
-test('a unit test edited since the last commit runs even when its imports did not change', async () => {
+test('a unit test edited or synced in since the last commit runs only when its imports reach a staged file', async () => {
   const dir = await fixture(js);
   writeFileSync(
     join(dir, 'test/unit/b.test.mjs'),
     unit('b', "import { b } from '../../src/b.mjs';\nb(2);")
   );
+  write(dir, {
+    'test/unit/other.test.mjs': unit('other', "import '../../src/b.mjs';"),
+    'test/unit/a2.test.mjs': unit('a2', "import { a } from '../../src/a.mjs';\na(3);"),
+  });
   change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
   const run = cover(dir);
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(run.ran, ['a', 'b']);
+  assert.deepEqual(run.ran, ['a', 'a2']);
+  assert.match(run.stderr, /running 2 of 6 unit test files/);
+});
+
+test('a synced-in unit test that also imports a module this tree lacks is skipped and named, not run to fail', async () => {
+  const dir = await fixture(js);
+  write(dir, {
+    'test/unit/elsewhere.test.mjs': unit(
+      'elsewhere',
+      "import { a } from '../../src/a.mjs';\nimport '../../src/not-here-yet.mjs';\na(1);"
+    ),
+  });
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const run = cover(dir);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.ran, ['a']);
+  assert.match(
+    run.stderr,
+    /skipping 1 that import a module this tree lacks: test\/unit\/elsewhere\.test\.mjs\n.*running 1 of 5 unit test files/
+  );
+});
+
+test('a README-only commit after syncing in new unit tests runs none of them', async () => {
+  const dir = await fixture(js);
+  write(dir, { 'test/unit/elsewhere.test.mjs': unit('elsewhere', "import '../../src/a.mjs';") });
+  change(dir, { 'README.md': '# fixture, changed\n' });
+  const run = cover(dir);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.ran, []);
+  assert.equal(run.covered, undefined);
+  assert.match(run.stderr, /no code staged/);
 });
 
 test('a staged file no test reaches runs no tests and leaves its lines uncovered for diff coverage', async () => {

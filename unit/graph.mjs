@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parse } from 'acorn';
@@ -243,12 +243,16 @@ function reacher(graph) {
   const context = { find, provides: provider(graph) };
   return (start) => {
     const touched = new Set();
+    const absent = [];
     const seen = new Set();
     const queue = [[start, BODY]];
     const go = (file, spec, name) => {
       const found = find(file, spec);
       if (found?.hit) queue.push([found.hit, name]);
-      else if (found) for (const path of found.missing) touched.add(path);
+      else if (found) {
+        for (const path of found.missing) touched.add(path);
+        if (found.missing.length > 0) absent.push(found.missing);
+      }
     };
     while (queue.length > 0) {
       const [file, name] = queue.pop();
@@ -263,7 +267,7 @@ function reacher(graph) {
         else go(next, spec, wanted);
       }
     }
-    return touched;
+    return { touched, absent };
   };
 }
 
@@ -298,20 +302,23 @@ function step(info, name, file, context) {
   return starred(file, info, name, context);
 }
 
-export function select({ root, changed, since }) {
-  const unit = join(root, 'test', 'unit');
-  const files = walk(unit);
-  const all = files.filter((file) => tests.test(file));
-  const fresh = files.filter((file) => since === undefined || statSync(file).mtimeMs > since);
-  const touched = new Set([...changed.map((file) => resolve(root, file)), ...fresh]);
+export function select({ root, changed }) {
+  const all = walk(join(root, 'test', 'unit')).filter((file) => tests.test(file));
+  const staged = new Set(changed.map((file) => resolve(root, file)));
   const reach = reacher(modules(root));
-  const reached = new Set(all.filter((test) => [...reach(test)].some((file) => touched.has(file))));
   const posix = (file) => relative(root, file).split(sep).join('/');
-  return {
-    tests: all
-      .filter((file) => reached.has(file))
-      .map(posix)
-      .sort(),
-    total: all.length,
-  };
+  const lacks = ([target, ...rest]) =>
+    !relative(root, target).startsWith('..') &&
+    !target.includes(`${sep}node_modules${sep}`) &&
+    !existsSync(target) &&
+    ![target, ...rest].some((path) => staged.has(path));
+  const reached = [];
+  const elsewhere = [];
+  for (const test of all) {
+    const { touched, absent } = reach(test);
+    if (![...touched].some((file) => staged.has(file))) continue;
+    const lacking = absent.some(lacks);
+    (lacking ? elsewhere : reached).push(posix(test));
+  }
+  return { tests: reached.sort(), elsewhere: elsewhere.sort(), total: all.length };
 }
