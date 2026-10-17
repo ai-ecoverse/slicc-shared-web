@@ -14,13 +14,6 @@ function git(...args) {
   return run.status === 0 ? run.stdout : undefined;
 }
 
-function since() {
-  const moved = git('log', '-g', '-1', '--format=%gd', '--date=unix', 'HEAD')?.match(/\{(\d+)\}/);
-  const committed = git('log', '-1', '--format=%ct', 'HEAD')?.trim();
-  const seconds = Math.max(Number(moved?.[1] ?? 0), Number(committed || 0));
-  return seconds > 0 ? seconds * 1000 : undefined;
-}
-
 function run(command, args, env) {
   const result = spawnSync(command, args, { cwd: root, env, stdio: 'inherit' });
   if (result.error) throw result.error;
@@ -30,7 +23,12 @@ function run(command, args, env) {
 function selection(staged) {
   if (process.env.SLICC_UNIT_ALL === '1') return undefined;
   try {
-    const { tests, total } = select({ root, changed: staged, since: since() });
+    const { tests, elsewhere, total } = select({ root, changed: staged });
+    if (elsewhere.length > 0) {
+      say(
+        `skipping ${elsewhere.length} that import a module this tree lacks: ${elsewhere.join(' ')}`
+      );
+    }
     say(`running ${tests.length} of ${total} unit test files`);
     return tests;
   } catch (error) {
