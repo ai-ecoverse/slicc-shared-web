@@ -42,7 +42,7 @@ test('a renovate annotation in a workflow or action file passes', async () => {
     ),
   });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^ok: /);
+  assert.match(run.stdout, /^slicc-lint-comments: PASS /);
 });
 
 test('any other comment in a workflow still fails', async () => {

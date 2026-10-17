@@ -19,5 +19,10 @@ while IFS= read -r file; do
       ;;
   esac
 done < "$list"
+count=$(wc -l < "$list" | tr -d ' ')
 rm -f "$list"
-exit "$failed"
+if [ "$failed" -ne 0 ]; then
+  printf 'slicc-agents-md: FAIL\n' >&2
+  exit 1
+fi
+printf 'slicc-agents-md: PASS %s AGENTS.md files within %s characters, no CLAUDE.md\n' "$count" "$limit"
