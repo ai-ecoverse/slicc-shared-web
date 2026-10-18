@@ -70,7 +70,8 @@ function segment(text) {
       if (end < 0) out += '\\[';
       else {
         const body = text.slice(i + 1, end);
-        out += `[${body.startsWith('!') ? `^${body.slice(1)}` : body.replace(/\\/g, '\\\\')}]`;
+        const escaped = body.replace(/\\/g, '\\\\');
+        out += `[${escaped.startsWith('!') ? `^${escaped.slice(1)}` : escaped}]`;
         i = end;
       }
     } else out += c.replace(SPECIAL, '\\$&');

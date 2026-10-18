@@ -467,6 +467,13 @@ test('cert self-guard fails closed on dot paths: ** crosses dot segments, * matc
   assert.deepEqual(touchedPaths(['lib/a1.mjs', 'lib/ab.mjs'], ['lib/a[!0-9].mjs']), ['lib/ab.mjs']);
   assert.equal(dotGlob('a.b/(c)+/**').test('a.b/(c)+/.x'), true);
   assert.equal(dotGlob('a.b/**').test('aXb/.x'), false, 'a literal dot stays literal');
+  assert.equal(dotGlob('a/[!\\]x').test('a/\\x'), false, 'a negated class escapes its backslash');
+  assert.equal(dotGlob('a/[!\\]x').test('a/yx'), true);
+  assert.throws(
+    () => touchedPaths(['a/b'], ['a/[z-a]']),
+    SyntaxError,
+    'a malformed class throws, so the guard fails closed'
+  );
 });
 
 test('cert self-guard: a pull request whose only change is a dot path under a guarded directory needs the label', async (t) => {
