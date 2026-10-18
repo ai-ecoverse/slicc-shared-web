@@ -55,8 +55,49 @@ export function patterns(text) {
   return globs;
 }
 
+const SPECIAL = /[\\^$.+()|{}]/g;
+
+function segment(text) {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '*') {
+      while (text[i + 1] === '*') i++;
+      out += '[^/]*';
+    } else if (c === '?') out += '[^/]';
+    else if (c === '[') {
+      const end = text.indexOf(']', i + 2);
+      if (end < 0) out += '\\[';
+      else {
+        const body = text.slice(i + 1, end);
+        out += `[${body.startsWith('!') ? `^${body.slice(1)}` : body.replace(/\\/g, '\\\\')}]`;
+        i = end;
+      }
+    } else out += c.replace(SPECIAL, '\\$&');
+  }
+  return out;
+}
+
+export function dotGlob(glob) {
+  const parts = glob.split('/');
+  let source = '';
+  parts.forEach((part, i) => {
+    const last = i === parts.length - 1;
+    if (part === '**') source += last ? '.+' : '(?:[^/]+/)*';
+    else source += segment(part) + (last ? '' : '/');
+  });
+  return new RegExp(`^${source}$`);
+}
+
 export function touchedPaths(paths, globs) {
-  return paths.filter((file) => globs.some((glob) => matchesGlob(file, glob)));
+  const dots = globs.map(dotGlob);
+  const dirs = globs.filter((glob) => glob.endsWith('/**')).map((glob) => glob.slice(0, -2));
+  return paths.filter(
+    (file) =>
+      globs.some((glob) => matchesGlob(file, glob)) ||
+      dots.some((re) => re.test(file)) ||
+      dirs.some((dir) => !/[*?[]/.test(dir) && file.startsWith(dir))
+  );
 }
 
 export function groupMembers(base, head) {

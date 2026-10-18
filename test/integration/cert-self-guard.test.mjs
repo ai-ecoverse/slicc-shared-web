@@ -423,3 +423,65 @@ test('cert self-guard merge group refuses non-merge unexplained commits', async 
   assert.equal(result.receipt.status, 'INCOMPLETE');
   assert.match(result.receipt.reason, /unexplained merge group commit/);
 });
+
+test('cert self-guard fails closed on dot paths: ** crosses dot segments, * matches a leading dot, and a guarded directory counts by prefix', async () => {
+  const { dotGlob, touchedPaths } = await import(
+    '../../.github/actions/cert-self-guard/changes.mjs'
+  );
+  const globs = [
+    '.github/workflows/cert*.yml',
+    '.github/workflows/cert*.yaml',
+    'scripts/cert/**',
+    'tools/cert-review/**',
+    '.github/actions/cert-self-guard/**',
+    '.github/runner.mjs',
+  ];
+  const dotted = [];
+  for (const dir of ['scripts/cert', 'tools/cert-review', '.github/actions/cert-self-guard'])
+    dotted.push(`${dir}/.f`, `${dir}/.d/e`, `${dir}/a/.b/c`, `${dir}/a/b/.c`, `${dir}/.a/b/.c`);
+  assert.deepEqual(touchedPaths(dotted, globs), dotted);
+  assert.deepEqual(
+    touchedPaths(
+      [
+        '.github/workflows/cert-x.yml',
+        '.github/workflows/cert.yaml',
+        '.github/workflows/ci.yml',
+        '.github/workflows/sub/cert-x.yml',
+        '.github/runner.mjs',
+        '.github/runner_mjs',
+        'README.md',
+        'src/.hidden',
+        'scripts/certify.mjs',
+        'tools/cert-reviewer/x.mjs',
+      ],
+      globs
+    ),
+    ['.github/workflows/cert-x.yml', '.github/workflows/cert.yaml', '.github/runner.mjs']
+  );
+  assert.deepEqual(touchedPaths(['a/.b/x.mjs', 'x.mjs', 'a/y.mjs'], ['**/x.mjs']), [
+    'a/.b/x.mjs',
+    'x.mjs',
+  ]);
+  assert.deepEqual(touchedPaths(['.npmrc', 'a/.npmrc', 'npmrc'], ['*rc']), ['.npmrc', 'npmrc']);
+  assert.deepEqual(touchedPaths(['lib/a1.mjs', 'lib/ab.mjs'], ['lib/a[0-9].mjs']), ['lib/a1.mjs']);
+  assert.deepEqual(touchedPaths(['lib/a1.mjs', 'lib/ab.mjs'], ['lib/a[!0-9].mjs']), ['lib/ab.mjs']);
+  assert.equal(dotGlob('a.b/(c)+/**').test('a.b/(c)+/.x'), true);
+  assert.equal(dotGlob('a.b/**').test('aXb/.x'), false, 'a literal dot stays literal');
+});
+
+test('cert self-guard: a pull request whose only change is a dot path under a guarded directory needs the label', async (t) => {
+  const f = fixture(t);
+  f.write('scripts/cert/.npmrc', 'registry=https://example.invalid\n');
+  f.write('scripts/cert/a/.b/c.mjs', 'process.exitCode = 0;\n');
+  const head = f.commit();
+  const pr = pull(1, head, f.base);
+  pr.labels = [];
+  const api = await apiServer(t, { 1: pr });
+  const result = await run(f, api, { pull_request: pr });
+  assert.equal(result.receipt.status, 'FAIL');
+  assert.deepEqual(result.receipt.members[0].touched.sort(), [
+    'scripts/cert/.npmrc',
+    'scripts/cert/a/.b/c.mjs',
+  ]);
+  assert.notEqual(result.exit, 0);
+});
