@@ -388,3 +388,39 @@ test('a test that imports names from a barrel, statically or by destructuring an
     git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', file, '--no-verify');
   }
 });
+
+test('a selection larger than SLICC_UNIT_BATCH runs in batches, each with its own lcov, and diff coverage gets every batch', async () => {
+  const dir = await fixture(js);
+  writeFileSync(
+    join(dir, 'node_modules', '.bin', 'slicc-diff-cover'),
+    '#!/bin/sh\nprintf "%s\\n" "$@" > args.txt\ncat "$@" > covered.txt\n'
+  );
+  change(dir, {
+    'src/a.mjs': 'export const a = (x) => x + 2;\n',
+    'src/b.mjs': 'export const b = (x) => x * 3;\n',
+  });
+  const run = cover(dir, { SLICC_UNIT_BATCH: '1' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.ran, ['a', 'b']);
+  assert.match(run.stderr, /running 2 of 4 unit test files/);
+  assert.match(run.stderr, /batch 1 of 2: 1 files/);
+  assert.match(run.stderr, /batch 2 of 2: 1 files/);
+  const args = readFileSync(join(dir, 'args.txt'), 'utf8').trim().split('\n');
+  assert.deepEqual(args, ['coverage/unit/batch-1/lcov.info', 'coverage/unit/batch-2/lcov.info']);
+  const [one, two] = args.map((file) => readFileSync(join(dir, file), 'utf8'));
+  const hit = (lcov, file) => /^LH:1$/m.test(record(lcov, file));
+  assert.deepEqual(
+    [
+      hit(one, 'src/a.mjs') || hit(two, 'src/a.mjs'),
+      hit(one, 'src/b.mjs') || hit(two, 'src/b.mjs'),
+    ],
+    [true, true]
+  );
+  assert.equal(
+    hit(one, 'src/a.mjs') && hit(one, 'src/b.mjs'),
+    false,
+    'each batch ran its own files only'
+  );
+  const single = cover(await fixture(js), {});
+  assert.equal(single.status, 0, single.stderr);
+});

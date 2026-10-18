@@ -48,17 +48,29 @@ if (process.env.SLICC_UNIT_ALL !== '1' && !staged.some((file) => code.test(file)
   process.exit(0);
 }
 
-const env = { ...process.env };
+const size = Number(process.env.SLICC_UNIT_BATCH ?? 60);
 const tests = selection(staged);
-if (tests === undefined) delete env.SLICC_UNIT_TESTS;
-else {
-  env.SLICC_UNIT_TESTS = tests.join('\n');
-  env.NODE_OPTIONS = inject(env.NODE_OPTIONS ?? '');
+const batches = [];
+if (tests === undefined || !(size > 0) || tests.length <= size) batches.push(tests);
+else for (let at = 0; at < tests.length; at += size) batches.push(tests.slice(at, at + size));
+const reports = [];
+for (const [index, batch] of batches.entries()) {
+  const env = { ...process.env };
+  if (batch === undefined) delete env.SLICC_UNIT_TESTS;
+  else {
+    env.SLICC_UNIT_TESTS = batch.join('\n');
+    env.NODE_OPTIONS = inject(env.NODE_OPTIONS ?? '');
+  }
+  if (batches.length > 1) {
+    env.SLICC_UNIT_COVERAGE_DIR = join('coverage', 'unit', `batch-${index + 1}`);
+    reports.push(join(env.SLICC_UNIT_COVERAGE_DIR, 'lcov.info'));
+    say(`batch ${index + 1} of ${batches.length}: ${batch.length} files`);
+  }
+  const status = run('npm', ['run', '--silent', 'test:unit'], env);
+  if (status !== 0) process.exit(status);
 }
-const status = run('npm', ['run', '--silent', 'test:unit'], env);
-if (status !== 0) process.exit(status);
 const local = join(root, 'node_modules', '.bin', 'slicc-diff-cover');
 const cover = existsSync(local)
   ? local
   : fileURLToPath(new URL('slicc-diff-cover.sh', import.meta.url));
-process.exit(run(cover, [], process.env));
+process.exit(run(cover, reports, process.env));
