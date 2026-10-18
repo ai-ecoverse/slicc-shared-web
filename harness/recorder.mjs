@@ -2,10 +2,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, relative } from 'node:path';
 import { cwd } from 'node:process';
 import { pathToFileURL } from 'node:url';
-import Util from 'monocart-coverage-reports/util';
+import * as mcrUtil from 'monocart-coverage-reports/util';
 import { CRASHED } from './cdp.mjs';
 import { trace } from './trace.mjs';
 import { bounded, ignore, raw, samples, sleep, TIMED_OUT } from './util.mjs';
+
+const Util = mcrUtil.Util ?? mcrUtil.default;
 
 const profiled = new Set(['page', 'worker', 'service_worker', 'shared_worker']);
 const sampling = [['Profiler.setSamplingInterval', { interval: 100 }], ['Profiler.start']];
