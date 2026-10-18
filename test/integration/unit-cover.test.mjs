@@ -388,3 +388,81 @@ test('a test that imports names from a barrel, statically or by destructuring an
     git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', file, '--no-verify');
   }
 });
+
+test('a selection larger than SLICC_UNIT_BATCH runs in batches, each with its own lcov, and diff coverage gets every batch', async () => {
+  const dir = await fixture(js);
+  writeFileSync(
+    join(dir, 'node_modules', '.bin', 'slicc-diff-cover'),
+    '#!/bin/sh\nprintf "%s\\n" "$@" > args.txt\ncat "$@" > covered.txt\n'
+  );
+  change(dir, {
+    'src/a.mjs': 'export const a = (x) => x + 2;\n',
+    'src/b.mjs': 'export const b = (x) => x * 3;\n',
+  });
+  const run = cover(dir, { SLICC_UNIT_BATCH: '1' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.ran, ['a', 'b']);
+  assert.match(run.stderr, /running 2 of 4 unit test files/);
+  assert.match(run.stderr, /batch 1 of 2: 1 files/);
+  assert.match(run.stderr, /batch 2 of 2: 1 files/);
+  const args = readFileSync(join(dir, 'args.txt'), 'utf8').trim().split('\n');
+  assert.deepEqual(args, ['coverage/unit/batch-1/lcov.info', 'coverage/unit/batch-2/lcov.info']);
+  const [one, two] = args.map((file) => readFileSync(join(dir, file), 'utf8'));
+  const hit = (lcov, file) => /^LH:1$/m.test(record(lcov, file));
+  assert.deepEqual(
+    [
+      hit(one, 'src/a.mjs') || hit(two, 'src/a.mjs'),
+      hit(one, 'src/b.mjs') || hit(two, 'src/b.mjs'),
+    ],
+    [true, true]
+  );
+  assert.equal(
+    hit(one, 'src/a.mjs') && hit(one, 'src/b.mjs'),
+    false,
+    'each batch ran its own files only'
+  );
+  assert.equal(
+    run.stdout
+      .trim()
+      .split('\n')
+      .filter((l) => l.startsWith('slicc-unit-cover:'))
+      .join('\n'),
+    'slicc-unit-cover: PASS 2 unit test files in 2 batches, diff coverage 100%'
+  );
+});
+
+test('one failing batch fails the whole run with one FAIL verdict, and diff coverage never runs', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/b.test.mjs': unit(
+      'b',
+      "import { b } from '../../src/b.mjs';\nb(1);\nthrow new Error('b broke');"
+    ),
+  });
+  change(dir, {
+    'src/a.mjs': 'export const a = (x) => x + 2;\n',
+    'src/b.mjs': 'export const b = (x) => x * 3;\n',
+  });
+  const run = cover(dir, { SLICC_UNIT_BATCH: '1' });
+  assert.notEqual(run.status, 0);
+  const lines = run.stdout.split('\n').filter((l) => l.startsWith('slicc-unit-cover:'));
+  assert.deepEqual(lines, ['slicc-unit-cover: FAIL batch 2 of 2 failed (status 1)']);
+  assert.equal(run.covered, undefined, 'diff coverage did not run');
+});
+
+test('a commit with no code staged passes with one verdict, and a failing diff coverage fails with one', async () => {
+  const docs = await fixture(js);
+  change(docs, { 'README.md': '# changed\n' });
+  const skipped = cover(docs);
+  assert.equal(skipped.status, 0);
+  assert.equal(skipped.stdout.trim(), 'slicc-unit-cover: PASS no code staged');
+  const dir = await fixture(js);
+  writeFileSync(join(dir, 'node_modules', '.bin', 'slicc-diff-cover'), '#!/bin/sh\nexit 1\n');
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const low = cover(dir);
+  assert.notEqual(low.status, 0);
+  assert.equal(
+    low.stdout.trim().split('\n').at(-1),
+    'slicc-unit-cover: FAIL diff coverage is not 100% (1 unit test files in 1 batch)'
+  );
+});

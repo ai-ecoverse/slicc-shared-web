@@ -12,7 +12,7 @@ const ours = (url) =>
 
 export default {
   name: process.env.npm_package_name ?? 'unit',
-  outputDir: 'coverage/unit',
+  outputDir: process.env.SLICC_UNIT_COVERAGE_DIR ?? 'coverage/unit',
   reports: ['lcovonly', 'console-details'],
   all: { dir: 'src', filter: '**/*.{js,mjs,ts}', transformer: strip },
   entryFilter: (entry) => ours(entry.url),
