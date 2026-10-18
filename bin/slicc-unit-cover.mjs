@@ -8,6 +8,10 @@ import { inject } from '../unit/inject.mjs';
 
 const root = process.cwd();
 const say = (line) => process.stderr.write(`slicc-unit-cover: ${line}\n`);
+const verdict = (ok, line) => {
+  process.stdout.write(`slicc-unit-cover: ${ok ? 'PASS' : 'FAIL'} ${line}\n`);
+  process.exit(ok ? 0 : 1);
+};
 
 function git(...args) {
   const run = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
@@ -45,7 +49,7 @@ const staged = (git('diff', '--cached', '--name-only', '--relative', '--no-renam
   .filter(Boolean);
 if (process.env.SLICC_UNIT_ALL !== '1' && !staged.some((file) => code.test(file))) {
   say('no code staged, skipping unit tests and diff coverage');
-  process.exit(0);
+  verdict(true, 'no code staged');
 }
 
 const size = Number(process.env.SLICC_UNIT_BATCH ?? 60);
@@ -67,10 +71,17 @@ for (const [index, batch] of batches.entries()) {
     say(`batch ${index + 1} of ${batches.length}: ${batch.length} files`);
   }
   const status = run('npm', ['run', '--silent', 'test:unit'], env);
-  if (status !== 0) process.exit(status);
+  if (status !== 0) {
+    const which = batches.length > 1 ? `batch ${index + 1} of ${batches.length}` : 'the unit tests';
+    verdict(false, `${which} failed (status ${status})`);
+  }
 }
 const local = join(root, 'node_modules', '.bin', 'slicc-diff-cover');
 const cover = existsSync(local)
   ? local
   : fileURLToPath(new URL('slicc-diff-cover.sh', import.meta.url));
-process.exit(run(cover, reports, process.env));
+const files = tests === undefined ? 'every unit test file' : `${tests.length} unit test files`;
+const counted = `${batches.length} ${batches.length === 1 ? 'batch' : 'batches'}`;
+const covered = run(cover, reports, process.env);
+if (covered !== 0) verdict(false, `diff coverage is not 100% (${files} in ${counted})`);
+verdict(true, `${files} in ${counted}, diff coverage 100%`);

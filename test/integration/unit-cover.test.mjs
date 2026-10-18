@@ -421,6 +421,48 @@ test('a selection larger than SLICC_UNIT_BATCH runs in batches, each with its ow
     false,
     'each batch ran its own files only'
   );
-  const single = cover(await fixture(js), {});
-  assert.equal(single.status, 0, single.stderr);
+  assert.equal(
+    run.stdout
+      .trim()
+      .split('\n')
+      .filter((l) => l.startsWith('slicc-unit-cover:'))
+      .join('\n'),
+    'slicc-unit-cover: PASS 2 unit test files in 2 batches, diff coverage 100%'
+  );
+});
+
+test('one failing batch fails the whole run with one FAIL verdict, and diff coverage never runs', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/b.test.mjs': unit(
+      'b',
+      "import { b } from '../../src/b.mjs';\nb(1);\nthrow new Error('b broke');"
+    ),
+  });
+  change(dir, {
+    'src/a.mjs': 'export const a = (x) => x + 2;\n',
+    'src/b.mjs': 'export const b = (x) => x * 3;\n',
+  });
+  const run = cover(dir, { SLICC_UNIT_BATCH: '1' });
+  assert.notEqual(run.status, 0);
+  const lines = run.stdout.split('\n').filter((l) => l.startsWith('slicc-unit-cover:'));
+  assert.deepEqual(lines, ['slicc-unit-cover: FAIL batch 2 of 2 failed (status 1)']);
+  assert.equal(run.covered, undefined, 'diff coverage did not run');
+});
+
+test('a commit with no code staged passes with one verdict, and a failing diff coverage fails with one', async () => {
+  const docs = await fixture(js);
+  change(docs, { 'README.md': '# changed\n' });
+  const skipped = cover(docs);
+  assert.equal(skipped.status, 0);
+  assert.equal(skipped.stdout.trim(), 'slicc-unit-cover: PASS no code staged');
+  const dir = await fixture(js);
+  writeFileSync(join(dir, 'node_modules', '.bin', 'slicc-diff-cover'), '#!/bin/sh\nexit 1\n');
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const low = cover(dir);
+  assert.notEqual(low.status, 0);
+  assert.equal(
+    low.stdout.trim().split('\n').at(-1),
+    'slicc-unit-cover: FAIL diff coverage is not 100% (1 unit test files in 1 batch)'
+  );
 });
