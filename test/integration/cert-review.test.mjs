@@ -1026,8 +1026,9 @@ test('the merge group fails closed on a second cert-review writer on its head', 
   assert.equal(state.issues.length, 1);
 });
 
-test('a long mixed-case run (a lockfile integrity, a base64 quote) is redacted in place and posted, not withheld', async () => {
+test('a lockfile integrity stays readable and a base64 quote is redacted in place; both post, neither withholds', async () => {
   const integrity = 'sha512-Qm9vQmFyQmF6UXV4MTIzNDU2Nzg5MEFiQ2RFZkdoSWpLbE1uT3BRclN0VXZXeFl6';
+  const quote = 'Zm9vQmFyQmF6UXV4MTIzNDU2Nzg5MEFiQ2RFZkdoSWpL';
   const { r, check } = await post(
     v2({
       verdict: 'fail',
@@ -1038,7 +1039,7 @@ test('a long mixed-case run (a lockfile integrity, a base64 quote) is redacted i
           line: 15,
           side: 'RIGHT',
           severity: 'fail',
-          body: `integrity ${integrity} is new`,
+          body: `integrity ${integrity} is new, and so is ${quote}`,
         },
       ],
     })
@@ -1047,7 +1048,8 @@ test('a long mixed-case run (a lockfile integrity, a base64 quote) is redacted i
   assert.equal(check.output.title, 'fail: 1 finding');
   const review = state.reviews.at(-1);
   assert.ok(review, 'the review is posted');
-  assert.doesNotMatch(JSON.stringify(review), /Qm9vQmFyQmF6UXV4/);
+  assert.match(JSON.stringify(review), /sha512-Qm9vQmFyQmF6UXV4/);
+  assert.doesNotMatch(JSON.stringify(review), /Zm9vQmFyQmF6UXV4/);
   assert.match(JSON.stringify(review), /\[redacted: a long token-like string\]/);
 });
 

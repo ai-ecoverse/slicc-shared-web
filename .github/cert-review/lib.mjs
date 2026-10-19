@@ -407,7 +407,9 @@ export function carriesSecret(text, secrets = []) {
 
 export function redact(text) {
   return String(text).replace(/[A-Za-z0-9+/=_-]{32,}/g, (run) =>
-    tokenish(run) && !/^[0-9a-f]{40}$/.test(run) ? '[redacted: a long token-like string]' : run
+    tokenish(run) && !/^[0-9a-f]+$/.test(run) && !/^sha(?:256|384|512)-/.test(run)
+      ? '[redacted: a long token-like string]'
+      : run
   );
 }
 
