@@ -164,8 +164,23 @@ async function publish(r, files) {
   if (r.conclusion === 'failure' || r.comments.length) await postReview({ ...r, files });
 }
 
+function codeCheck() {
+  if (env.CODE_WANTED !== 'true') return [];
+  if (env.CODE_EXIT === '0') return [];
+  return [
+    {
+      path: '(code check)',
+      line: 1,
+      side: 'RIGHT',
+      severity: 'fail',
+      body: `The repository's code check ${env.CODE_EXIT ? `failed (exit ${env.CODE_EXIT})` : 'left no result'}: ${quiet(env.CODE_LINE || 'no output')}`,
+    },
+  ];
+}
+
 function evidenceHits() {
-  if (env.EVIDENCE_WANTED !== 'true') return [];
+  if (env.EVIDENCE_WANTED !== 'true' || (env.FETCH_WANTED && env.FETCH_WANTED !== 'true'))
+    return [];
   let h;
   try {
     h = JSON.parse(env.EVIDENCE_HITS || 'null');
@@ -213,6 +228,7 @@ async function reviewed() {
     ...injections(files, globs(env.GUARD_PATHS), globs(env.INJECTION_ALLOW ?? '')),
     ...opaque(files, globs(env.QUIET), globs(env.LOUD)),
     ...evidenceHits(),
+    ...codeCheck(),
   ];
   const v = verdictOf();
   if (v.secret)

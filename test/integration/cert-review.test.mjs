@@ -1426,11 +1426,16 @@ test('the reusable workflow: the evidence job reads only (contents, actions), ho
   assert.doesNotMatch(job, /secrets\.|: write/);
   assert.match(
     job,
-    /if: needs\.plan\.outputs\.kind == 'review' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository && inputs\.evidence-workflow != ''/
+    /if: needs\.plan\.outputs\.kind == 'review' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository && \(inputs\.evidence-workflow != '' \|\| inputs\.code-check != ''\)/
   );
   assert.match(
+    job,
+    /if \[ "\$GITHUB_EVENT_NAME" = pull_request \]; then git checkout -q --detach "\$HEAD_SHA"; fi/
+  );
+  assert.match(job, /npm ci --ignore-scripts --no-audit --no-fund/);
+  assert.match(
     wf,
-    /\n {2}review:\n {4}name: review\n {4}needs: \[plan, evidence\]\n {4}if: \$\{\{ !cancelled\(\) && needs\.plan\.outputs\.kind == 'review' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository && \(needs\.evidence\.result == 'success' \|\| \(needs\.evidence\.result == 'skipped' && inputs\.evidence-workflow == ''\)\) \}\}\n/
+    /\n {2}review:\n {4}name: review\n {4}needs: \[plan, evidence\]\n {4}if: \$\{\{ !cancelled\(\) && needs\.plan\.outputs\.kind == 'review' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository && \(needs\.evidence\.result == 'success' \|\| \(needs\.evidence\.result == 'skipped' && inputs\.evidence-workflow == '' && inputs\.code-check == ''\)\) \}\}\n/
   );
   assert.match(
     wf,
@@ -1548,4 +1553,80 @@ test('post passes a passing review with clean evidence (control)', async () => {
   });
   assert.equal(r.code, 0, r.stdout);
   assert.equal(state.checks.at(-1).conclusion, 'success');
+});
+
+for (const [name, env, conclusion, title] of [
+  [
+    'a failed code check',
+    { CODE_EXIT: '1', CODE_LINE: 'release-state: FAIL @ai-ecoverse/x@1: not certified' },
+    'failure',
+    'fail: 1 finding',
+  ],
+  [
+    'a code check that left no result',
+    { CODE_EXIT: '', CODE_LINE: '' },
+    'failure',
+    'fail: 1 finding',
+  ],
+  [
+    'a passing code check (control)',
+    { CODE_EXIT: '0', CODE_LINE: 'release-state: PASS' },
+    'success',
+    'pass',
+  ],
+]) {
+  test(`post on ${name}`, async () => {
+    reset();
+    mkdirSync(join(scratch, 'cc'), { recursive: true });
+    const verdict = join(scratch, 'cc', `${name.length}.json`);
+    writeFileSync(
+      verdict,
+      JSON.stringify({
+        schema: 'cert-review/v2',
+        head: shas.code,
+        verdict: 'pass',
+        summary: 'Fine.',
+        comments: [],
+      })
+    );
+    const r = await run('post.mjs', {
+      GITHUB_EVENT_PATH: event('cc-post', shas.code),
+      KIND: 'review',
+      EVIDENCE_WANTED: 'true',
+      FETCH_WANTED: 'false',
+      CODE_WANTED: 'true',
+      EVIDENCE: 'success',
+      EVIDENCE_ARTIFACT: 'success',
+      ARTIFACTS: 'success',
+      VERDICT: verdict,
+      ...env,
+    });
+    assert.equal(state.checks.at(-1).conclusion, conclusion, r.stdout);
+    assert.equal(state.checks.at(-1).output.title, title);
+    if (conclusion === 'failure')
+      assert.match(JSON.stringify(state.reviews.at(-1)), /The repository's code check/);
+  });
+}
+
+test('a code check alone (no CI workflow) is evidence for the prompt; its missing result stops the review', async () => {
+  const dir = mkdtempSync(join(scratch, 'cc-'));
+  const out = mkdtempSync(join(scratch, 'prompt-'));
+  const base = {
+    GITHUB_EVENT_PATH: event('cc-diff', shas.code),
+    CERT_DIR: out,
+    CERT_PROMPT: join(cert, 'frame.txt'),
+    CERT_RULES: 'scripts/cert/review.txt',
+    CERT_EVIDENCE_DIR: dir,
+    CERT_EVIDENCE_FETCH: 'false',
+    CERT_CODE_CHECK: 'true',
+  };
+  const missing = await run('diff.mjs', base);
+  assert.notEqual(missing.code, 0);
+  writeFileSync(join(dir, 'code-check.txt'), 'release-state: PASS\n');
+  const ok = await run('diff.mjs', base);
+  assert.equal(ok.code, 0, ok.stdout);
+  assert.match(
+    readFileSync(join(out, 'prompt.txt'), 'utf8'),
+    /the repository's code check, run from main's code on this head/
+  );
 });
