@@ -90,6 +90,14 @@ function handle(req, res, body) {
     Object.assign(c, body);
     return reply(res, 200, c);
   }
+  if (p === '/repos/o/r/contents/.github/workflows/cert-review.yml') {
+    try {
+      const text = git('show', `${url.searchParams.get('ref')}:.github/workflows/cert-review.yml`);
+      return reply(res, 200, { content: Buffer.from(`${text}\n`).toString('base64') });
+    } catch {
+      return reply(res, 404, { message: 'Not Found' });
+    }
+  }
   if ((m = /^\/repos\/o\/r\/pulls\/(\d+)$/.exec(p))) return reply(res, 200, state.pulls[m[1]]);
   if ((m = /^\/repos\/o\/r\/pulls\/(\d+)\/reviews$/.exec(p))) {
     if (req.method === 'GET') return reply(res, 200, []);
@@ -149,6 +157,11 @@ before(async () => {
   git('add', '-A');
   git('commit', '-q', '-m', 'switching');
   shas.switching = git('rev-parse', 'HEAD');
+  git('checkout', '-q', '-B', 'bumped', shas.base);
+  write('.github/workflows/cert-review.yml', caller('c'.repeat(40)));
+  git('add', '-A');
+  git('commit', '-q', '-m', 'bumped');
+  shas.bumped = git('rev-parse', 'HEAD');
   server = createServer((req, res) => {
     let data = '';
     req.on('data', (c) => {
@@ -199,6 +212,7 @@ function run(script, env) {
         GUARD_PATHS: '.github/workflows/**\nscripts/cert/**',
         CERT_TOOLS_REF: TOOLS,
         GITHUB_EVENT_NAME: 'pull_request_target',
+        GITHUB_SHA: shas.base,
         ...env,
       },
     });
@@ -792,4 +806,75 @@ test('the reusable workflow: only post and the merge group can write checks, the
   for (const name of ['plan', 'review', 'post', 'group'])
     assert.match(jobs[name], /ref: \$\{\{ inputs\.tools-ref \}\}/, name);
   assert.match(jobs.guard, /ref: f342d7cf558c817ce517bbbbc4cc46df6eac2f97/);
+});
+
+test('main’s caller is the one that runs (github.sha), not the pull request’s stale base.sha', async () => {
+  const fresh = await run('plan.mjs', {
+    GITHUB_EVENT_PATH: event('fresh', shas.code),
+    GUARD: 'PASS',
+    RECEIPT: receipt(shas.code),
+    GITHUB_SHA: shas.bumped,
+    CERT_TOOLS_REF: 'c'.repeat(40),
+  });
+  assert.equal(fresh.outputs.kind, 'review', fresh.stdout);
+  const stale = await run('plan.mjs', {
+    GITHUB_EVENT_PATH: event('stale', shas.code),
+    GUARD: 'PASS',
+    RECEIPT: receipt(shas.code),
+    GITHUB_SHA: shas.bumped,
+  });
+  assert.match(stale.outputs.title, /^incomplete: tools-ref is not the pinned cert-review/);
+});
+
+test('bootstrap accepts a pull_request run only for a head whose caller is the v2 caller at tools-ref', async () => {
+  reset();
+  state.workflowRuns = [
+    {
+      id: 31,
+      run_attempt: 1,
+      path: '.github/workflows/cert-review.yml',
+      event: 'pull_request',
+      head_sha: shas.legacy,
+      status: 'completed',
+      conclusion: 'success',
+      created_at: '2026-10-19T00:00:00Z',
+      repository: { full_name: 'o/r' },
+      pull_requests: [{ number: 7, base: { ref: 'main' } }],
+    },
+  ];
+  state.jobs = { 31: [{ name: 'cert / post', conclusion: 'success' }] };
+  const file = join(scratch, 'group-legacy.json');
+  writeFileSync(
+    file,
+    JSON.stringify({ merge_group: { head_sha: shas.docs, base_sha: shas.legacy } })
+  );
+  const r = await run('group.mjs', {
+    GITHUB_EVENT_PATH: file,
+    GUARD: 'PASS',
+    CERT_GROUP_WAIT_MS: '1',
+    RECEIPT: JSON.stringify({
+      status: 'PASS',
+      head: shas.docs,
+      members: [{ pr: 7, head: shas.legacy, status: 'PASS' }],
+    }),
+  });
+  const check = state.checks.find((c) => c.head_sha === shas.docs);
+  assert.equal(check.conclusion, 'failure', r.stdout);
+  assert.match(check.output.summary, /accepted only for the switching pull request/);
+});
+
+test('a fork gets the fork failure, never the tools-ref one', async () => {
+  const p = await run('plan.mjs', {
+    GITHUB_EVENT_PATH: event('forkleg', shas.code, {
+      pull: {
+        head: { sha: shas.code, repo: { full_name: 'x/r' } },
+        base: { sha: shas.legacy, ref: 'main' },
+      },
+    }),
+    GUARD: 'PASS',
+    RECEIPT: receipt(shas.code),
+    GITHUB_EVENT_NAME: 'pull_request',
+    GITHUB_SHA: shas.legacy,
+  });
+  assert.match(p.outputs.title, /^fork: /, p.stdout);
 });

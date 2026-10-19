@@ -38,7 +38,17 @@ const fileAt = (commit) => {
     return '';
   }
 };
-const onMain = fileAt(pull.base.sha);
+const mainTip = () => {
+  if (env.GITHUB_EVENT_NAME !== 'pull_request') return sha(env.GITHUB_SHA);
+  try {
+    git('fetch', '-q', '--no-tags', 'origin', 'main');
+    return sha(git('rev-parse', 'FETCH_HEAD').trim());
+  } catch {
+    return sha(pull.base.sha);
+  }
+};
+const fork = pull.head.repo?.full_name !== repo;
+const onMain = fileAt(mainTip());
 const target = /^\s*pull_request_target:/m.test(onMain);
 if (env.GITHUB_EVENT_NAME === 'pull_request' && target) {
   console.log(
@@ -47,13 +57,13 @@ if (env.GITHUB_EVENT_NAME === 'pull_request' && target) {
   output({ kind: 'noop' });
   process.exit(0);
 }
-const pinned = target ? onMain : fileAt(pull.head.sha);
+const pinned = target ? onMain : fork ? '' : fileAt(pull.head.sha);
 const uses = [
   ...pinned.matchAll(
     /ai-ecoverse\/slicc-shared-web\/\.github\/workflows\/cert-review\.yml@([0-9a-f]{40})/g
   ),
 ].map((m) => m[1]);
-if (uses.length !== 1 || uses[0] !== env.CERT_TOOLS_REF) {
+if (!fork && pull.base.ref === 'main' && (uses.length !== 1 || uses[0] !== env.CERT_TOOLS_REF)) {
   const title = 'incomplete: tools-ref is not the pinned cert-review; re-run';
   const summaryText = `${WORKFLOW} on main must call slicc-shared-web's cert-review.yml at exactly one sha and pass that sha as tools-ref (found ${uses.join(', ') || 'none'}, tools-ref ${env.CERT_TOOLS_REF || 'empty'}).`;
   console.log(`cert-review plan: failure: ${title}`);
@@ -61,7 +71,6 @@ if (uses.length !== 1 || uses[0] !== env.CERT_TOOLS_REF) {
   process.exit(0);
 }
 
-const fork = pull.head.repo?.full_name !== repo;
 const files = fork ? [] : diffOf(sha(pull.base.sha), head);
 const paths = touchedPaths(files);
 const d = decide({

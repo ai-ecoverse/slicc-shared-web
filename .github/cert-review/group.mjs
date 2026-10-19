@@ -7,9 +7,9 @@ const head = sha(event.merge_group.head_sha);
 const runId = env.GITHUB_RUN_ID;
 const runUrl = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${runId}`;
 const gh = api(env.GITHUB_REPOSITORY);
-const POST = 'cert / post';
+const named = (job, name) => job.name === name || job.name.endsWith(` / ${name}`);
 
-const NOOP = ['cert / self-guard', 'cert / plan'];
+const NOOP = ['self-guard', 'plan'];
 const onBase = (() => {
   try {
     return git('show', `${sha(event.merge_group.base_sha)}:${WORKFLOW}`);
@@ -21,6 +21,15 @@ const EVENTS = /^\s*pull_request_target:/m.test(onBase)
   ? ['pull_request_target']
   : ['pull_request_target', 'pull_request'];
 const WAIT = Number(env.CERT_GROUP_WAIT_MS ?? 15000);
+
+async function callerAt(memberHead) {
+  try {
+    const file = await gh.call(`contents/${WORKFLOW}?ref=${memberHead}`);
+    return Buffer.from(file.content ?? '', 'base64').toString('utf8');
+  } catch {
+    return '';
+  }
+}
 
 async function runsOf(memberHead) {
   const file = WORKFLOW.split('/').pop();
@@ -60,7 +69,7 @@ async function verdictRun(memberHead, pr) {
       r.conclusion !== 'cancelled' &&
       jobs.length > 0 &&
       jobs.every((j) => j.conclusion === 'skipped') &&
-      NOOP.every((n) => jobs.some((j) => j.name === n));
+      NOOP.every((n) => jobs.some((j) => named(j, n)));
     if (noop) continue;
     const prs = r.pull_requests ?? [];
     if (
@@ -70,7 +79,23 @@ async function verdictRun(memberHead, pr) {
       return {
         problem: `${url} is not for #${pr} into main (${prs.map((p) => `#${p.number}→${p.base?.ref}`).join(', ') || 'no pull request'})`,
       };
-    const post = jobs.find((j) => j.name === POST);
+    const post = jobs.find((j) => named(j, 'post'));
+    if (r.event === 'pull_request') {
+      const caller = await callerAt(memberHead);
+      const pins = [
+        ...caller.matchAll(
+          /ai-ecoverse\/slicc-shared-web\/\.github\/workflows\/cert-review\.yml@([0-9a-f]{40})/g
+        ),
+      ].map((x) => x[1]);
+      if (
+        !/^\s*pull_request_target:/m.test(caller) ||
+        pins.length !== 1 ||
+        pins[0] !== env.CERT_TOOLS_REF
+      )
+        return {
+          problem: `${url} is a pull_request run, accepted only for the switching pull request, and this head's ${WORKFLOW} is not the v2 caller at ${env.CERT_TOOLS_REF}`,
+        };
+    }
     if (post?.conclusion !== 'success')
       return {
         problem: `the newest cert-review on this head, ${url}, did not certify it (post: ${post?.conclusion ?? 'missing'})`,

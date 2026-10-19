@@ -148,7 +148,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ${{ (((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'cert-review-approved') || (github.event.action == 'edited' && !github.event.changes.base)) && format('cert-review-noop-{0}', github.run_id) || format('cert-review-{0}', github.event.pull_request.number || github.event.merge_group.head_sha) }}
+  group: ${{ (((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'cert-review-approved') || (github.event.action == 'edited' && !github.event.changes.base)) && format('cert-review-noop-{0}', github.run_id) || format('cert-review-{0}-{1}', github.event_name == 'pull_request' && 'leg' || 'pr', github.event.pull_request.number || github.event.merge_group.head_sha) }}
   cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 jobs:
   cert:
@@ -170,9 +170,10 @@ jobs:
 
 - **Jobs** (`cert / …`): `self-guard` (cert-self-guard v1.24.2, pinned), `plan` (read-only: fork, draft, cert path, not behaviour, too large, or review), `review` (Claude on Bedrock with Read/Glob/Grep only, no Bash/Write/Web, structured output in `verdict.schema.json`, `contents: read`, the key in that step only), `post` (the only writer of `cert-review`: validates the verdict, re-anchors comments into diff hunks, posts one review, `REQUEST_CHANGES` on a failure, and runs a code-only prompt-injection and opaque-file scan that can only fail a pass), and `merge group` (code only: each member's newest run of the caller on its head must have certified it).
 - **The rules** file is the caller's own section of the prompt ("the repository and what to certify"), read from `main`; the frame around it (untrusted text, severity, tests, answer format) is shared in `.github/cert-review/frame.txt`. A missing rules file stops the review, which reads as `incomplete`.
-- **tools-ref** must be the sha in the caller's `uses:`; the plan reads main's caller and fails closed on a mismatch.
+- **tools-ref** must be the sha in the caller's `uses:`; the plan reads the caller that runs (main's tip, `github.sha`, on `pull_request_target`) and fails closed on a mismatch. The rules and the review's workspace come from that same commit, not from the pull request's possibly stale `base.sha`; `base.sha` only anchors the diff.
+- **Job names:** the caller's job may have any name; the merge group matches the called jobs by their ` / post`, ` / plan` and ` / self-guard` suffixes.
 - **Security boundary:** `pull_request_target` runs main's caller, prompt and post code, so a pull request can't change its own cert path. Every workflow and action is in the default guard paths, so a pull request can't add its own check writer without the coordinator's `cert-review-approved`. The merge group accepts only runs of the caller's path on `pull_request_target`.
-- **Bootstrap (one pull request per repo, no ruleset flip):** the switching pull request's caller also lists `pull_request:` with the same types. While main's caller has no `pull_request_target`, that leg certifies the switching pull request with its own code (under the coordinator's label) and the merge group accepts its run. Once main has it, the leg is a no-op and only `pull_request_target` runs count. A follow-up removes the leg.
+- **Bootstrap (one pull request per repo, no ruleset flip):** the switching pull request's caller also lists `pull_request:` with the same types, in a concurrency group of its own (`cert-review-leg-<n>`), so the two legs never cancel each other. While main's caller has no `pull_request_target`, that leg certifies the switching pull request with its own code (under the coordinator's label) and the merge group accepts its run. Once main has it, the leg is a no-op and only `pull_request_target` runs count. A follow-up removes the leg.
 - **Releases** carry no cert line: merged on main means certified; supply-chain provenance stays a code-only check in each repo.
 
 ## Which unit tests a commit runs

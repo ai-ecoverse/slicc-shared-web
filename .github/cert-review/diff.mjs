@@ -15,7 +15,7 @@ if (!out || !template || !rulesFile)
 const rules = (
   env.GITHUB_EVENT_NAME === 'pull_request'
     ? git('show', `${head}:${rulesFile}`)
-    : git('show', `${base}:${rulesFile}`)
+    : git('show', `${sha(env.GITHUB_SHA)}:${rulesFile}`)
 ).trim();
 if (!rules) throw new Error(`${rulesFile} is empty: no certification rules, no review`);
 mkdirSync(out, { recursive: true });
