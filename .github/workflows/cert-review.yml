@@ -45,6 +45,26 @@ on:
         description: The largest annotated diff one review reads in full
         type: number
         default: 15000
+      evidence-workflow:
+        description: The caller's CI workflow file (for example ci.yml) whose pull_request run on the head, and push run on the base branch, the review reads as evidence; empty for none. It is part of the cert path
+        type: string
+        default: ''
+      evidence-artifacts:
+        description: Names (globs) of that workflow's artifacts to fetch, bound by id and digest
+        type: string
+        default: ''
+      evidence-wait-minutes:
+        description: How long the evidence job waits for the head's run to finish (at most 200; the job times out at 240)
+        type: number
+        default: 120
+      evidence-max-mb:
+        description: The most artifact bytes the evidence job fetches (zipped), across both sides
+        type: number
+        default: 200
+      code-check:
+        description: A command the evidence job runs from the caller's tree at main (the head's on the bootstrap pull_request leg) after npm ci --ignore-scripts, with BASE_SHA (the merge base), HEAD_SHA and a read-only GH_TOKEN; a non-zero exit fails the check in code, and its output is evidence. Empty for none
+        type: string
+        default: ''
       light-runner:
         description: runs-on for every job (empty uses vars.CERT_LIGHT_RUNNER, then ubuntu-latest)
         type: string
@@ -171,10 +191,91 @@ jobs:
           RECEIPT: ${{ needs.guard.outputs.receipt }}
         run: node .cert-tools/.github/cert-review/plan.mjs
 
+  evidence:
+    name: evidence
+    needs: plan
+    if: needs.plan.outputs.kind == 'review' && github.event.pull_request.head.repo.full_name == github.repository && (inputs.evidence-workflow != '' || inputs.code-check != '')
+    runs-on: ${{ inputs.light-runner || vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      id: ${{ steps.upload.outputs.artifact-id }}
+      digest: ${{ steps.upload.outputs.artifact-digest }}
+      reason: ${{ steps.fetch.outputs.reason }}
+      hits: ${{ steps.fetch.outputs.hits }}
+      code: ${{ steps.code.outputs.code }}
+      code-line: ${{ steps.code.outputs.line }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.sha || github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ai-ecoverse/slicc-shared-web
+          ref: ${{ inputs.tools-ref }}
+          path: .cert-tools
+          sparse-checkout: .github/cert-review
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+
+      - id: code
+        name: The caller's code check, from main's tree, on the pull request's head as data
+        if: inputs.code-check != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          CODE_CHECK: ${{ inputs.code-check }}
+          OUT: ${{ runner.temp }}/evidence
+        run: |
+          set -uo pipefail
+          mkdir -p "$OUT"
+          git fetch -q --no-tags origin "$HEAD_SHA" "$PR_BASE"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then git checkout -q --detach "$HEAD_SHA"; fi
+          export BASE_SHA HEAD_SHA
+          BASE_SHA=$(git merge-base "$PR_BASE" "$HEAD_SHA")
+          code=0
+          { [ ! -f package-lock.json ] || npm ci --ignore-scripts --no-audit --no-fund; } > "$RUNNER_TEMP/code-check-install.log" 2>&1 || code=$?
+          if [ "$code" = 0 ]; then bash -c "$CODE_CHECK" > "$OUT/code-check.txt" 2>&1 || code=$?; else cp "$RUNNER_TEMP/code-check-install.log" "$OUT/code-check.txt"; fi
+          tail -c 20000 "$OUT/code-check.txt"
+          echo "code-check: exit $code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          line=$(grep -v '^[[:space:]]*$' "$OUT/code-check.txt" | grep -m1 -E '^[a-z-]+: (FAIL|PASS|INCOMPLETE)' || tail -n1 "$OUT/code-check.txt")
+          printf 'line=%s\n' "$(printf '%s' "$line" | tr -d '\000-\037' | cut -c1-600)" >> "$GITHUB_OUTPUT"
+
+      - id: fetch
+        if: inputs.evidence-workflow != ''
+        name: The evidence workflow's runs on the head and the base, their artifacts bound by id and digest (no pull-request code runs here)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CERT_EVIDENCE_WORKFLOW: ${{ inputs.evidence-workflow }}
+          CERT_EVIDENCE_ARTIFACTS: ${{ inputs.evidence-artifacts }}
+          CERT_EVIDENCE_WAIT: ${{ inputs.evidence-wait-minutes }}
+          CERT_EVIDENCE_MAX_MB: ${{ inputs.evidence-max-mb }}
+          CERT_EVIDENCE_DIR: ${{ runner.temp }}/evidence
+        run: node .cert-tools/.github/cert-review/evidence.mjs
+
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cert-review-evidence
+          path: ${{ runner.temp }}/evidence/
+          if-no-files-found: error
+          include-hidden-files: true
+          overwrite: true
+
   review:
     name: review
-    needs: plan
-    if: needs.plan.outputs.kind == 'review' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: [plan, evidence]
+    if: ${{ !cancelled() && needs.plan.outputs.kind == 'review' && github.event.pull_request.head.repo.full_name == github.repository && (needs.evidence.result == 'success' || (needs.evidence.result == 'skipped' && inputs.evidence-workflow == '' && inputs.code-check == '')) }}
     runs-on: ${{ inputs.light-runner || vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
@@ -206,11 +307,21 @@ jobs:
         with:
           node-version: 24
 
+      - if: inputs.evidence-workflow != '' || inputs.code-check != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.evidence.outputs.id }}
+          path: ${{ runner.temp }}/cert/evidence
+          digest-mismatch: error
+
       - id: diff
         name: The annotated diff and main's prompt
         shell: bash
         env:
           CERT_DIR: ${{ runner.temp }}/cert
+          CERT_EVIDENCE_DIR: ${{ (inputs.evidence-workflow != '' || inputs.code-check != '') && format('{0}/cert/evidence', runner.temp) || '' }}
+          CERT_EVIDENCE_FETCH: ${{ inputs.evidence-workflow != '' }}
+          CERT_CODE_CHECK: ${{ inputs.code-check != '' }}
           CERT_PROMPT: .cert-tools/.github/cert-review/frame.txt
           CERT_RULES: ${{ inputs.rules }}
         run: |
@@ -267,7 +378,7 @@ jobs:
 
   post:
     name: post
-    needs: [plan, review]
+    needs: [plan, evidence, review]
     if: ${{ !cancelled() && needs.plan.result != 'skipped' && needs.plan.outputs.kind != 'noop' }}
     runs-on: ${{ inputs.light-runner || vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -311,6 +422,17 @@ jobs:
           EXPECT_DIGEST: ${{ needs.review.outputs.digest }}
         run: node .cert-tools/.github/cert-review/artifacts.mjs
 
+      - id: evidence
+        name: The run's only evidence artifact is the one the evidence job uploaded
+        if: inputs.evidence-workflow != '' || inputs.code-check != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CERT_ARTIFACT_PREFIX: cert-review-evidence
+          EXPECT_ID: ${{ needs.evidence.outputs.id }}
+          EXPECT_DIGEST: ${{ needs.evidence.outputs.digest }}
+        run: node .cert-tools/.github/cert-review/artifacts.mjs
+
       - if: needs.review.outputs.id != ''
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -327,6 +449,15 @@ jobs:
           ARTIFACTS: ${{ steps.artifacts.outcome }}
           VERDICT: ${{ runner.temp }}/verdict/verdict.json
           KIND: ${{ needs.plan.outputs.kind }}
+          EVIDENCE_WANTED: ${{ inputs.evidence-workflow != '' || inputs.code-check != '' }}
+          FETCH_WANTED: ${{ inputs.evidence-workflow != '' }}
+          CODE_WANTED: ${{ inputs.code-check != '' }}
+          CODE_EXIT: ${{ needs.evidence.outputs.code }}
+          CODE_LINE: ${{ needs.evidence.outputs.code-line }}
+          EVIDENCE: ${{ needs.evidence.result }}
+          EVIDENCE_REASON: ${{ needs.evidence.outputs.reason }}
+          EVIDENCE_HITS: ${{ needs.evidence.outputs.hits }}
+          EVIDENCE_ARTIFACT: ${{ steps.evidence.outcome }}
           CONCLUSION: ${{ needs.plan.outputs.conclusion }}
           TITLE: ${{ needs.plan.outputs.title }}
           SUMMARY: ${{ needs.plan.outputs.summary }}

@@ -255,7 +255,7 @@ function chunked(anchor, mark, text) {
   return out;
 }
 
-const UNSAFE_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029"\\]/;
+export const UNSAFE_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029"\\]/;
 export const shownPath = (p) => (UNSAFE_NAME.test(p) ? JSON.stringify(p) : p);
 
 export function annotate(files) {
