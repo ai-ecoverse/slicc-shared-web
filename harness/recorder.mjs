@@ -134,29 +134,40 @@ function contextOf(sessions, parents, sessionId) {
   return undefined;
 }
 
-export function caused({ callFrames = [], hitBreakpoints = [] }, exits) {
+export function caused({ callFrames = [], hitBreakpoints = [] }, target = {}, exits = new Map()) {
   const [top] = callFrames;
-  if (top?.functionName === unloading) return true;
-  const lines = top && hitBreakpoints.length > 0 ? exits.get(pathOf(top.url)) : undefined;
+  if (!top) return false;
+  const unloaded = target.type === 'page' && callFrames.length === 1;
+  if (unloaded && top.functionName === unloading && top.url === '') return true;
+  const lines = hitBreakpoints.length > 0 ? exits.get(pathOf(top.url)) : undefined;
   return Boolean(lines?.includes(top.location.lineNumber));
 }
 
 export function ownership(parents) {
   const owned = new Map();
   const targets = new Map();
+  const debugging = new Set();
   const mine = (sessionId) => owned.get(targets.get(sessionId)) === sessionId;
   return {
     mine,
     adopt({ sessionId, targetInfo }, parent) {
+      targets.set(sessionId, targetInfo.targetId);
       if ((parent && !mine(parent)) || owned.has(targetInfo.targetId)) return false;
       owned.set(targetInfo.targetId, sessionId);
-      targets.set(sessionId, targetInfo.targetId);
       if (parent) parents.set(sessionId, parent);
       return true;
+    },
+    watch(sessionId) {
+      if (targets.has(sessionId) && !mine(sessionId)) debugging.add(sessionId);
+    },
+    held(sessionId) {
+      const targetId = targets.get(sessionId);
+      return [...debugging].some((other) => targets.get(other) === targetId);
     },
     drop(sessionId) {
       if (mine(sessionId)) owned.delete(targets.get(sessionId));
       targets.delete(sessionId);
+      debugging.delete(sessionId);
     },
   };
 }
@@ -308,9 +319,12 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
       const { exception, text } = params.exceptionDetails;
       log(sessionId, `uncaught ${exception?.description ?? text}`);
     }
+    if (method.startsWith('Debugger.')) own.watch(sessionId);
     if (method === 'Debugger.paused') {
       pauses.set(sessionId, pauseOf(sessions.get(sessionId), params));
-      if (own.mine(sessionId) && caused(params, exits)) await paused(sessionId);
+      const target = sessions.get(sessionId);
+      const resumable = !own.held(sessionId) || caused(params, target, exits);
+      if (own.mine(sessionId) && resumable) await paused(sessionId);
     }
     if (method === 'Debugger.resumed') pauses.delete(sessionId);
     if (method === CRASHED) log(sessionId, params.reason);

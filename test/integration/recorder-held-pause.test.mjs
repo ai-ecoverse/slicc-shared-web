@@ -11,7 +11,7 @@ const quiet = await launch({ roots, exits, coverage: [], profile: false });
 const counted = await launch({ roots, exits });
 after(() => Promise.all([quiet.close(), counted.close()]));
 
-async function hold(chrome, t) {
+async function hold(chrome, t, away) {
   const page = await chrome.page(t);
   await page.goto('/plain.html');
   const { targetInfo } = await page.send('Target.getTargetInfo');
@@ -46,6 +46,7 @@ async function hold(chrome, t) {
     });
     assert.equal(result.value, 42);
     await send('Debugger.resume');
+    if (away) await page.goto(away);
     await send('Debugger.disable');
   } finally {
     off();
@@ -60,8 +61,7 @@ test('with nothing collected, a pause in a session the test attached stays held'
 });
 
 test('with coverage on, a pause in a session the test attached stays held while the harness covers its own', async (t) => {
-  const page = await hold(counted, t);
-  await page.goto('/index.html');
+  const page = await hold(counted, t, '/index.html');
   await page.goto('/plain.html');
   await page.evaluate(() => import('/many.js'));
   assert.equal((await page.evaluate((n) => window.many(n), 5)).length, 5);
