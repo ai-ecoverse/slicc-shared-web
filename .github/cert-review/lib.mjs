@@ -255,11 +255,14 @@ function chunked(anchor, mark, text) {
   return out;
 }
 
+const UNSAFE_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029"\\]/;
+export const shownPath = (p) => (UNSAFE_NAME.test(p) ? JSON.stringify(p) : p);
+
 export function annotate(files) {
   const out = [];
   for (const f of files) {
-    const how = `${STATUS[f.status] ?? f.status}${f.from ? ` from ${f.from}` : ''}${f.binary ? ', binary' : ''}`;
-    out.push(`=== ${f.path} (${how})`);
+    const how = `${STATUS[f.status] ?? f.status}${f.from ? ` from ${shownPath(f.from)}` : ''}${f.binary ? ', binary' : ''}`;
+    out.push(`=== ${shownPath(f.path)} (${how})`);
     for (const l of f.lines) {
       if (l.kind === '@') out.push(l.text);
       else if (l.kind === '+') out.push(...chunked(`R${l.right}`, '+', l.text));
@@ -439,6 +442,20 @@ export function injectionOf(text) {
 export function injections(files, exempt, allow = []) {
   const hits = [];
   for (const f of files) {
+    const named = [f.path, f.from].filter(Boolean);
+    const anchor = f.lines.find((l) => l.kind === '+')?.right ?? 1;
+    if (
+      named.some(
+        (p) => UNSAFE_NAME.test(p) || CONTROLS.test(p) || injectionOf(p).startsWith('fail')
+      )
+    )
+      hits.push({
+        path: f.path,
+        line: anchor,
+        side: 'RIGHT',
+        severity: 'fail',
+        body: `A file name with control characters, quotes or text aimed at the certifier (${shownPath(f.path)}): rename it; names are shown JSON-encoded to the review.`,
+      });
     if (matchesAny(f.path, exempt)) continue;
     const allowed = matchesAny(f.path, allow);
     for (const l of f.lines) {
