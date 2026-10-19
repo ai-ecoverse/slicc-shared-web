@@ -11,7 +11,8 @@ const Util = mcrUtil.Util ?? mcrUtil.default;
 
 const profiled = new Set(['page', 'worker', 'service_worker', 'shared_worker']);
 const sampling = [['Profiler.setSamplingInterval', { interval: 100 }], ['Profiler.start']];
-const unload = "addEventListener('beforeunload', () => { debugger; })";
+const unloading = 'sliccHarnessUnload';
+const unload = `addEventListener('beforeunload', function ${unloading}() { debugger; })`;
 
 function pathOf(url) {
   return URL.canParse(url) ? new URL(url).pathname : '';
@@ -133,6 +134,33 @@ function contextOf(sessions, parents, sessionId) {
   return undefined;
 }
 
+export function caused({ callFrames = [], hitBreakpoints = [] }, exits) {
+  const [top] = callFrames;
+  if (top?.functionName === unloading) return true;
+  const lines = top && hitBreakpoints.length > 0 ? exits.get(pathOf(top.url)) : undefined;
+  return Boolean(lines?.includes(top.location.lineNumber));
+}
+
+export function ownership(parents) {
+  const owned = new Map();
+  const targets = new Map();
+  const mine = (sessionId) => owned.get(targets.get(sessionId)) === sessionId;
+  return {
+    mine,
+    adopt({ sessionId, targetInfo }, parent) {
+      if ((parent && !mine(parent)) || owned.has(targetInfo.targetId)) return false;
+      owned.set(targetInfo.targetId, sessionId);
+      targets.set(sessionId, targetInfo.targetId);
+      if (parent) parents.set(sessionId, parent);
+      return true;
+    },
+    drop(sessionId) {
+      if (mine(sessionId)) owned.delete(targets.get(sessionId));
+      targets.delete(sessionId);
+    },
+  };
+}
+
 export function retain(scripts, result) {
   for (const script of result) {
     const prev = scripts.get(script.url);
@@ -180,6 +208,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
   const parents = new Map();
   const tabs = new Map();
   const early = [];
+  const own = ownership(parents);
   const ours = covered(server, coverage);
   let run = null;
 
@@ -264,12 +293,12 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
 
   cdp.on(async ({ method, params, sessionId }) => {
     if (method === 'Target.attachedToTarget') {
-      if (sessionId) parents.set(params.sessionId, sessionId);
-      await attach(params);
+      if (own.adopt(params, sessionId)) await attach(params);
     }
     if (method === 'Target.detachedFromTarget') {
       sessions.delete(params.sessionId);
       pauses.delete(params.sessionId);
+      own.drop(params.sessionId);
     }
     if (method === 'Runtime.consoleAPICalled') {
       const text = params.args.map((arg) => arg.value ?? arg.description).join(' ');
@@ -281,7 +310,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
     }
     if (method === 'Debugger.paused') {
       pauses.set(sessionId, pauseOf(sessions.get(sessionId), params));
-      await paused(sessionId);
+      if (own.mine(sessionId) && caused(params, exits)) await paused(sessionId);
     }
     if (method === 'Debugger.resumed') pauses.delete(sessionId);
     if (method === CRASHED) log(sessionId, params.reason);
