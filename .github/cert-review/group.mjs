@@ -150,27 +150,6 @@ try {
 if (!problem) {
   try {
     const repo = env.GITHUB_REPOSITORY;
-    const spots = [{ ref: head, event: 'merge_group', job: 'cert / merge group' }];
-    for (const m of JSON.parse(env.RECEIPT).members)
-      spots.push({ ref: sha(m.head), event: 'pull_request_target', job: 'cert / post' });
-    for (const spot of spots) {
-      const foreign = await foreignWriters(gh, spot.ref, {
-        event: spot.event,
-        job: spot.job,
-        repo,
-      });
-      if (!foreign.length) continue;
-      const how = await alert(gh, spot.ref, foreign, runUrl);
-      problem = `another workflow wrote cert-review on ${spot.ref} (alert issue ${how}): ${foreign.map((f) => `${f.url} (${f.reason})`).join('; ')}`;
-      break;
-    }
-  } catch (err) {
-    problem = `listing the cert-review check runs failed: ${err.message}`;
-  }
-}
-if (!problem) {
-  try {
-    const repo = env.GITHUB_REPOSITORY;
     const spots = [{ ref: head, event: 'merge_group', job: 'merge group' }];
     for (const m of JSON.parse(env.RECEIPT).members)
       spots.push({ ref: sha(m.head), event: EVENTS, job: 'post' });

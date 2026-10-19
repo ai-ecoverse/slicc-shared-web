@@ -137,7 +137,7 @@ function conclude(found, verdict, problem) {
   const comments = [...found, ...(verdict?.comments ?? [])];
   const fails = comments.filter((c) => c.severity === 'fail').length;
   const titled = `fail: ${fails} finding${fails === 1 ? '' : 's'}`;
-  if (!verdict && !found.length)
+  if (!verdict && !fails)
     return {
       conclusion: 'failure',
       title: `incomplete: ${problem}; re-run`,
@@ -151,7 +151,7 @@ function conclude(found, verdict, problem) {
     ? `${pre}${found.length ? `The review's own verdict was ${verdict.verdict}. ` : ''}${verdict.summary}`
     : `${pre}No valid verdict either (${problem}).`;
   return {
-    conclusion: fails ? 'failure' : 'success',
+    conclusion: fails || !verdict ? 'failure' : 'success',
     title: fails ? titled : 'pass',
     text,
     comments,
@@ -260,5 +260,5 @@ await setCheck(gh, {
 output({ checked: 'true', conclusion: r.conclusion });
 const line = `cert-review: ${r.conclusion} on ${head} (#${n}): ${r.title}`;
 console.log(line);
-summary(`${line}\n\n${r.text}`);
+summary(`${line}\n\n${redact(quiet(r.text))}`);
 process.exit(r.conclusion === 'success' ? 0 : 1);

@@ -1093,3 +1093,18 @@ test('the injection scan: controls and reviewer-aimed text fail, generic phrases
     ]
   );
 });
+
+test('a missing verdict with only scanner notes is incomplete, never a pass', async () => {
+  reset();
+  branch('noteonly', { 'extension/note.js': 'const s = "the system prompt for the agent";\n' });
+  const head = shas.noteonly;
+  const r = await run('post.mjs', {
+    GITHUB_EVENT_PATH: event('notes-only', head),
+    KIND: 'review',
+    ARTIFACTS: 'success',
+    VERDICT: join(scratch, 'absent-verdict.json'),
+  });
+  assert.equal(r.code, 1, r.stdout);
+  assert.equal(state.checks.at(-1).conclusion, 'failure');
+  assert.match(state.checks.at(-1).output.title, /^incomplete: /);
+});
