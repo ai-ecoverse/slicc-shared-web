@@ -140,8 +140,16 @@ function tidy(dir, root, side, record) {
       if (hits.length < 50) hits.push({ path: `${side}/${shownPath(rel)}`, line, why });
     };
     if (UNSAFE_NAME.test(rel) || injectionOf(rel).startsWith('fail')) hit(0, 'its name');
-    if (IMAGE.test(name)) {
+    if (IMAGE.test(name) && side !== 'head') {
       record.files++;
+      continue;
+    }
+    if (IMAGE.test(name)) {
+      rmSync(p, { force: true });
+      record.dropped.push({
+        path: shownPath(rel),
+        why: 'an image the pull request made (no code can scan its text)',
+      });
       continue;
     }
     const bytes = readFileSync(p);
@@ -184,7 +192,15 @@ async function fetchSide(side, run, required) {
   };
   const { picked, older } = await artifactsOf(run);
   record.older = older;
+  const attemptStart = Date.parse(run.run_started_at ?? '');
   for (const a of picked) {
+    if (!Number.isFinite(attemptStart) || !(Date.parse(a.created_at ?? '') >= attemptStart)) {
+      record.skipped.push({
+        name: JSON.stringify(a.name),
+        why: `not from attempt ${run.run_attempt}`,
+      });
+      continue;
+    }
     if (!/^[\w.-]+$/.test(a.name) || /^\.+$/.test(a.name)) {
       record.skipped.push({ name: JSON.stringify(a.name), why: 'an unsafe name' });
       continue;

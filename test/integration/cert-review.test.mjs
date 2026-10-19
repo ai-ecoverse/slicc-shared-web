@@ -146,7 +146,12 @@ function handle(req, res, body) {
     return res.end(zip);
   }
   if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/artifacts$/.exec(p)))
-    return reply(res, 200, { artifacts: state.runArtifacts?.[m[1]] ?? state.artifacts });
+    return reply(res, 200, {
+      artifacts: (state.runArtifacts?.[m[1]] ?? state.artifacts).map((x) => ({
+        created_at: '2026-10-19T10:05:00Z',
+        ...x,
+      })),
+    });
   if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)$/.exec(p)))
     return reply(res, 200, state.runs[m[1]]);
   return reply(res, 404, { message: `no route ${req.method} ${p}` });
@@ -1180,6 +1185,7 @@ const ciRun = (o) => ({
   conclusion: 'failure',
   html_url: `https://github.example/o/r/actions/runs/${o.id}`,
   run_attempt: 1,
+  run_started_at: '2026-10-19T10:00:00Z',
   ...o,
 });
 
@@ -1469,8 +1475,12 @@ test('the evidence job unpacks by artifact id, skips unsafe names, keeps the new
   assert.equal(m.head.older, 1, 'the older cert-evidence is not unpacked');
   assert.deepEqual(m.head.skipped, [{ name: '".."', why: 'an unsafe name' }]);
   assert.equal(existsSync(join(dir, 'head/91/dump.bin')), false);
-  assert.ok(existsSync(join(dir, 'head/91/shot.png')), 'an image stays for the review to look at');
-  assert.deepEqual(m.head.dropped, [{ path: '91/dump.bin', why: 'binary' }]);
+  assert.equal(
+    existsSync(join(dir, 'head/91/shot.png')),
+    false,
+    'a head image is dropped: no code scans its text'
+  );
+  assert.deepEqual(m.head.dropped.map((d) => d.path).sort(), ['91/dump.bin', '91/shot.png']);
   assert.equal(m.injections.count, 0);
   assert.equal(existsSync(join(dir, 'head/90')), false);
 });
@@ -1629,4 +1639,22 @@ test('a code check alone (no CI workflow) is evidence for the prompt; its missin
     readFileSync(join(out, 'prompt.txt'), 'utf8'),
     /the repository's code check, run from main's code on this head/
   );
+});
+
+test('an artifact from an earlier attempt of the run is never evidence for its latest attempt', async () => {
+  evidenceState({
+    headRuns: [
+      ciRun({
+        id: 900,
+        event: 'pull_request',
+        head_sha: shas.code,
+        pull_requests: [{ number: 7 }],
+        run_attempt: 2,
+        run_started_at: '2026-10-19T11:00:00Z',
+      }),
+    ],
+  });
+  const r = await evidence(mkdtempSync(join(scratch, 'ev-')));
+  assert.equal(r.code, 1, r.stdout);
+  assert.match(r.stdout, /run 900 on the head has none of the artifacts/);
 });
