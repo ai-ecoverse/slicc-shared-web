@@ -9,14 +9,21 @@ import { executablePath, explicit } from './browser.mjs';
 import { cdn } from './cdn.mjs';
 import { CRASHED, connect, pipe } from './cdp.mjs';
 import { crashpad } from './dumps.mjs';
-import { extensionSource, install, unpacked } from './extensions.mjs';
+import {
+  BUILTIN_PATH,
+  builtinWanted,
+  extensionSource,
+  install,
+  installBuiltin,
+  unpacked,
+} from './extensions.mjs';
 import { page } from './page.mjs';
 import { breakpoints, recorder } from './recorder.mjs';
 import { serve } from './server.mjs';
 import { artifacts, bounded, ignore, sleep, slug, TIMED_OUT } from './util.mjs';
 
 export const flags = [
-  '--headless',
+  '--headless=new',
   '--remote-debugging-port=0',
   '--remote-debugging-pipe',
   '--no-first-run',
@@ -33,20 +40,33 @@ export const flags = [
 ];
 
 export const unrealistic = [
-  '--headless',
+  '--headless=new',
   '--disable-background-timer-throttling',
   '--disable-backgrounding-occluded-windows',
   '--disable-renderer-backgrounding',
 ];
 
-export function commandLine(profile, extensions = [], extra = [], realistic = false) {
-  const loaded = extensions.length > 0;
+export function commandLine(
+  profile,
+  extensions = [],
+  extra = [],
+  realistic = false,
+  preloaded = []
+) {
+  const all = [...preloaded, ...extensions];
+  const loaded = all.length > 0;
   const dropped = new Set([
     ...(loaded ? ['--disable-extensions'] : []),
     ...(realistic ? unrealistic : []),
   ]);
   const base = flags.filter((flag) => !dropped.has(flag));
-  const load = loaded ? ['--enable-unsafe-extension-debugging'] : [];
+  const load = loaded
+    ? [
+        '--enable-unsafe-extension-debugging',
+        ...(preloaded.length > 0 ? [`--load-extension=${preloaded.join(',')}`] : []),
+        `--disable-extensions-except=${all.join(',')}`,
+      ]
+    : [];
   return [...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
 }
 
@@ -293,6 +313,7 @@ export async function launch({
   exits = {},
   intercept = [],
   extensions = [],
+  extension = true,
   args = [],
   timeout,
   stallAfter,
@@ -301,6 +322,7 @@ export async function launch({
   persistent = false,
   executable,
 } = {}) {
+  const builtin = builtinWanted(extension, inherited);
   const browser = executable === undefined ? await executablePath() : explicit(executable);
   pruning ??= prune();
   await pruning;
@@ -314,7 +336,7 @@ export async function launch({
   const dumps = await crashpad();
   const { child, exited, stderr } = await start(
     userData,
-    commandLine(userData, loaded, args, realistic),
+    commandLine(userData, loaded, args, realistic, builtin ? [BUILTIN_PATH] : []),
     browser,
     dumps.env
   ).catch(async (error) => {
@@ -351,6 +373,15 @@ export async function launch({
     waitForDebuggerOnStart: true,
     flatten: true,
   });
+  const harnessExtension = builtin
+    ? await installBuiltin(cdp).catch(async (error) => {
+        await stop(cdp, child);
+        untrack();
+        await rm(userData, { recursive: true, force: true });
+        await Promise.all([dumps.remove(), server.close()]);
+        throw error;
+      })
+    : null;
   await install(cdp, found);
 
   async function tabs() {
@@ -411,6 +442,7 @@ export async function launch({
     url: server.url,
     pid: child.pid,
     profile: userData,
+    extension: harnessExtension,
     cdn: remote.state,
     requests: server.requests,
     overrides: server.overrides,
