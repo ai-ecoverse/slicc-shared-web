@@ -10,8 +10,8 @@ import { cdn } from './cdn.mjs';
 import { CRASHED, connect, pipe } from './cdp.mjs';
 import { crashpad } from './dumps.mjs';
 import {
-  BUILTIN_PATH,
   builtinWanted,
+  exclusive,
   extensionSource,
   install,
   installBuiltin,
@@ -51,22 +51,15 @@ export function commandLine(
   extensions = [],
   extra = [],
   realistic = false,
-  preloaded = []
+  builtin = false
 ) {
-  const all = [...preloaded, ...extensions];
-  const loaded = all.length > 0;
+  const loaded = builtin || extensions.length > 0;
   const dropped = new Set([
     ...(loaded ? ['--disable-extensions'] : []),
     ...(realistic ? unrealistic : []),
   ]);
   const base = flags.filter((flag) => !dropped.has(flag));
-  const load = loaded
-    ? [
-        '--enable-unsafe-extension-debugging',
-        ...(preloaded.length > 0 ? [`--load-extension=${preloaded.join(',')}`] : []),
-        `--disable-extensions-except=${all.join(',')}`,
-      ]
-    : [];
+  const load = loaded ? ['--enable-unsafe-extension-debugging'] : [];
   return [...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
 }
 
@@ -336,7 +329,7 @@ export async function launch({
   const dumps = await crashpad();
   const { child, exited, stderr } = await start(
     userData,
-    commandLine(userData, loaded, args, realistic, builtin ? [BUILTIN_PATH] : []),
+    commandLine(userData, loaded, args, realistic, builtin),
     browser,
     dumps.env
   ).catch(async (error) => {
@@ -373,16 +366,18 @@ export async function launch({
     waitForDebuggerOnStart: true,
     flatten: true,
   });
-  const harnessExtension = builtin
-    ? await installBuiltin(cdp).catch(async (error) => {
-        await stop(cdp, child);
-        untrack();
-        await rm(userData, { recursive: true, force: true });
-        await Promise.all([dumps.remove(), server.close()]);
-        throw error;
-      })
-    : null;
-  await install(cdp, found);
+  const harnessExtension = await (async () => {
+    const own = builtin ? await installBuiltin(cdp) : null;
+    await install(cdp, found);
+    await exclusive(cdp, [...(own ? [own.id] : []), ...found.keys()]);
+    return own;
+  })().catch(async (error) => {
+    await stop(cdp, child);
+    untrack();
+    await rm(userData, { recursive: true, force: true });
+    await Promise.all([dumps.remove(), server.close()]);
+    throw error;
+  });
 
   async function tabs() {
     const { targetInfos } = await cdp.send('Target.getTargets');

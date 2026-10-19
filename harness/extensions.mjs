@@ -64,3 +64,15 @@ export async function installBuiltin(cdp) {
   }
   return { id, path: BUILTIN_PATH };
 }
+
+export async function exclusive(cdp, allowed) {
+  const { targetInfos } = await cdp.send('Target.getTargets');
+  const hosts = targetInfos
+    .map(({ url }) => url)
+    .filter((url) => url.startsWith('chrome-extension://'))
+    .map((url) => new URL(url).host);
+  const foreign = [...new Set(hosts)].filter((host) => !allowed.includes(host));
+  if (foreign.length > 0) {
+    throw new Error(`Chrome loaded extensions the harness did not ask for: ${foreign.join(', ')}`);
+  }
+}
