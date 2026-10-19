@@ -132,6 +132,49 @@ A `pull_request` workflow can be deliberately rewritten to skip the guard, chang
 
 The committed public CLI integration regressions use real git repositories and a fake GitHub HTTP API. Run only this non-browser suite locally with `node --test test/integration/cert-self-guard.test.mjs`; CI also runs it with the full integration suite. It covers touched/untouched changes, a self-passing workflow/pin edit, rename paths, label timing against **server-side arrival** (including a backdated committer date), permission, approval followed by a push, delayed synchronize preserving a post-push approval, unknown arrival causing conservative invalidation, API refusal and groups containing an unapproved or stale PR.
 
+## Certification review (cert-review v2)
+
+`.github/workflows/cert-review.yml` is a reusable workflow that certifies every non-draft pull request into `main` and sets one **`cert-review` check run** on its head (app 15368, always `success` or `failure`, never neutral or skipped). It follows Lars's 2026-10-19 model: no approval or label gates (draft status decides), findings as line comments on the diff, an LLM that reads and never runs PR code, and a separate job that validates the closed verdict schema and posts it. The design note is `slicc-agent-plan/cert-review-v2.md`; the reference implementation is slicc-extension's (B28).
+
+A caller (`.github/workflows/cert-review.yml` in the repo, its only cert workflow):
+
+```yaml
+name: cert-review
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled, edited]
+  merge_group:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ (((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'cert-review-approved') || (github.event.action == 'edited' && !github.event.changes.base)) && format('cert-review-noop-{0}', github.run_id) || format('cert-review-{0}', github.event.pull_request.number || github.event.merge_group.head_sha) }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
+jobs:
+  cert:
+    name: cert
+    uses: ai-ecoverse/slicc-shared-web/.github/workflows/cert-review.yml@<sha>
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+      pull-requests: write
+    with:
+      tools-ref: <the same sha>
+      rules: scripts/cert/review.txt
+      loud: |
+        src/**
+    secrets:
+      AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+```
+
+- **Jobs** (`cert / …`): `self-guard` (cert-self-guard v1.24.2, pinned), `plan` (read-only: fork, draft, cert path, not behaviour, too large, or review), `review` (Claude on Bedrock with Read/Glob/Grep only, no Bash/Write/Web, structured output in `verdict.schema.json`, `contents: read`, the key in that step only), `post` (the only writer of `cert-review`: validates the verdict, re-anchors comments into diff hunks, posts one review, `REQUEST_CHANGES` on a failure, and runs a code-only prompt-injection and opaque-file scan that can only fail a pass), and `merge group` (code only: each member's newest run of the caller on its head must have certified it).
+- **The rules** file is the caller's own section of the prompt ("the repository and what to certify"), read from `main`; the frame around it (untrusted text, severity, tests, answer format) is shared in `.github/cert-review/frame.txt`. A missing rules file stops the review, which reads as `incomplete`.
+- **tools-ref** must be the sha in the caller's `uses:`; the plan reads main's caller and fails closed on a mismatch.
+- **Security boundary:** `pull_request_target` runs main's caller, prompt and post code, so a pull request can't change its own cert path. Every workflow and action is in the default guard paths, so a pull request can't add its own check writer without the coordinator's `cert-review-approved`. The merge group accepts only runs of the caller's path on `pull_request_target`.
+- **Bootstrap (one pull request per repo, no ruleset flip):** the switching pull request's caller also lists `pull_request:` with the same types. While main's caller has no `pull_request_target`, that leg certifies the switching pull request with its own code (under the coordinator's label) and the merge group accepts its run. Once main has it, the leg is a no-op and only `pull_request_target` runs count. A follow-up removes the leg.
+- **Releases** carry no cert line: merged on main means certified; supply-chain provenance stays a code-only check in each repo.
+
 ## Which unit tests a commit runs
 
 The diff-coverage hook, `slicc-unit-cover`, runs only the unit tests that cover the staged change, then `slicc-diff-cover` on their `coverage/unit/lcov.info`, so every staged line in `src/` still has to run:
