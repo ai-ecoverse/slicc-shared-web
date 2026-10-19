@@ -164,6 +164,37 @@ async function publish(r, files) {
   if (r.conclusion === 'failure' || r.comments.length) await postReview({ ...r, files });
 }
 
+function evidenceHits() {
+  if (env.EVIDENCE_WANTED !== 'true') return [];
+  let h;
+  try {
+    h = JSON.parse(env.EVIDENCE_HITS || 'null');
+  } catch {}
+  if (!h || typeof h.count !== 'number')
+    return [
+      {
+        path: '(evidence)',
+        line: 1,
+        side: 'RIGHT',
+        severity: 'fail',
+        body: 'The evidence job left no injection scan result: not certified.',
+      },
+    ];
+  if (!h.count) return [];
+  const where = (h.first ?? [])
+    .map((x) => `${x.path}${x.line ? `:${x.line}` : ''} (${x.why})`)
+    .join('; ');
+  return [
+    {
+      path: '(evidence)',
+      line: 1,
+      side: 'RIGHT',
+      severity: 'fail',
+      body: `The pull request's CI evidence carries ${h.count} line(s) of prompt-injection text or controls: ${where}. The code that printed them is in this pull request; remove it.`,
+    },
+  ];
+}
+
 async function reviewed() {
   if (env.EVIDENCE_WANTED === 'true' && env.EVIDENCE !== 'success')
     return {
@@ -171,10 +202,17 @@ async function reviewed() {
       title: `incomplete: evidence; re-run`,
       text: `The review's CI evidence was not fetched (${env.EVIDENCE || 'missing'}${env.EVIDENCE_REASON ? `: ${env.EVIDENCE_REASON}` : ''}). Not certified; re-run when the evidence workflow has finished.`,
     };
+  if (env.EVIDENCE_WANTED === 'true' && env.EVIDENCE_ARTIFACT !== 'success')
+    return {
+      conclusion: 'failure',
+      title: 'incomplete: evidence; re-run',
+      text: 'The evidence artifact the review read is not the one the evidence job uploaded. Not certified; re-run.',
+    };
   const files = diffOf(base, head);
   const found = [
     ...injections(files, globs(env.GUARD_PATHS), globs(env.INJECTION_ALLOW ?? '')),
     ...opaque(files, globs(env.QUIET), globs(env.LOUD)),
+    ...evidenceHits(),
   ];
   const v = verdictOf();
   if (v.secret)

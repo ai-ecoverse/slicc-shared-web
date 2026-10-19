@@ -2,7 +2,18 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { api, git, globs, matchesAny, output, sha, summary } from './lib.mjs';
+import {
+  api,
+  git,
+  globs,
+  injectionOf,
+  matchesAny,
+  output,
+  sha,
+  shownPath,
+  summary,
+  UNSAFE_NAME,
+} from './lib.mjs';
 
 const env = process.env;
 const repo = env.GITHUB_REPOSITORY;
@@ -93,19 +104,66 @@ async function artifactsOf(run) {
     all.push(...(data.artifacts ?? []));
     if ((data.artifacts ?? []).length < 100) break;
   }
-  return all.filter((a) => matchesAny(a.name, names)).sort((a, b) => a.name.localeCompare(b.name));
+  const newest = new Map();
+  for (const a of all.filter((x) => matchesAny(x.name, names)))
+    if (!newest.has(a.name) || newest.get(a.name).id < a.id) newest.set(a.name, a);
+  return {
+    picked: [...newest.values()].sort((a, b) => a.id - b.id),
+    older: all.length - newest.size,
+  };
 }
 
-function unlinkLinks(dir) {
-  let files = 0;
+const IMAGE = /\.(?:png|jpe?g|gif|webp)$/i;
+const hits = [];
+let hitCount = 0;
+let unpacked = 0;
+
+function tidy(dir, root, side, record) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
+    const rel = p.slice(root.length + 1);
     const s = lstatSync(p);
-    if (s.isDirectory()) files += unlinkLinks(p);
-    else if (s.isFile()) files++;
-    else rmSync(p, { force: true });
+    if (s.isDirectory()) {
+      tidy(p, root, side, record);
+      continue;
+    }
+    if (!s.isFile()) {
+      rmSync(p, { force: true });
+      record.dropped.push({ path: shownPath(rel), why: 'not a regular file' });
+      continue;
+    }
+    unpacked += s.size;
+    if (unpacked > budget * 4)
+      stop(`the evidence unpacks to more than ${(budget * 4) / 1048576} MB`);
+    const hit = (line, why) => {
+      hitCount++;
+      if (hits.length < 50) hits.push({ path: `${side}/${shownPath(rel)}`, line, why });
+    };
+    if (UNSAFE_NAME.test(rel) || injectionOf(rel).startsWith('fail')) hit(0, 'its name');
+    if (IMAGE.test(name)) {
+      record.files++;
+      continue;
+    }
+    const bytes = readFileSync(p);
+    if (bytes.includes(0)) {
+      rmSync(p, { force: true });
+      record.dropped.push({ path: shownPath(rel), why: 'binary' });
+      continue;
+    }
+    record.files++;
+    if (side !== 'head') continue;
+    bytes
+      .toString('utf8')
+      .split('\n')
+      .forEach((l, i) => {
+        const kind = injectionOf(l);
+        if (kind.startsWith('fail'))
+          hit(
+            i + 1,
+            kind === 'fail-control' ? 'a bidi or zero-width control' : 'text aimed at the certifier'
+          );
+      });
   }
-  return files;
 }
 
 let used = 0;
@@ -121,8 +179,16 @@ async function fetchSide(side, run, required) {
     conclusion: run.conclusion,
     artifacts: [],
     skipped: [],
+    dropped: [],
+    files: 0,
   };
-  for (const a of await artifactsOf(run)) {
+  const { picked, older } = await artifactsOf(run);
+  record.older = older;
+  for (const a of picked) {
+    if (!/^[\w.-]+$/.test(a.name) || /^\.+$/.test(a.name)) {
+      record.skipped.push({ name: JSON.stringify(a.name), why: 'an unsafe name' });
+      continue;
+    }
     if (a.expired) {
       record.skipped.push({ name: a.name, why: 'expired' });
       continue;
@@ -148,19 +214,34 @@ async function fetchSide(side, run, required) {
     writeFileSync(zip, bytes);
     const listed = execFileSync('unzip', ['-Zt', zip], { encoding: 'utf8' });
     const size = Number(/([\d]+) bytes uncompressed/.exec(listed)?.[1] ?? Number.POSITIVE_INFINITY);
-    if (size > budget * 4)
-      stop(`${side} artifact ${a.name} unpacks to ${size} bytes, over the budget`);
-    const dest = join(dir, a.name.replace(/[^\w.-]/g, '_'));
+    if (unpacked + size > budget * 4)
+      stop(
+        `${side} artifact ${a.name} would take the evidence over ${(budget * 4) / 1048576} MB unpacked`
+      );
+    const dest = join(dir, String(a.id));
     mkdirSync(dest, { recursive: true });
-    execFileSync('unzip', ['-qq', '-o', zip, '-d', dest], { timeout: 600000 });
+    execFileSync(
+      'bash',
+      [
+        '-c',
+        'ulimit -f "$1"; exec unzip -qq -o "$2" -d "$3"',
+        'unzip',
+        String(Math.ceil((budget * 4) / 512)),
+        zip,
+        dest,
+      ],
+      { timeout: 600000 }
+    );
     rmSync(zip, { force: true });
-    const files = unlinkLinks(dest);
+    const before = record.files;
+    tidy(dest, dir, side, record);
     record.artifacts.push({
       name: a.name,
       id: a.id,
+      dir: `${side}/${a.id}`,
       digest: `sha256:${digest}`,
       bytes: bytes.length,
-      files,
+      files: record.files - before,
     });
   }
   if (required && !record.artifacts.length)
@@ -180,8 +261,9 @@ const manifest = {
     ? await fetchSide('base', b, false)
     : { none: `no finished push run of ${file} on ${pull.base.ref} at or behind the base` },
 };
+manifest.injections = { count: hitCount, first: hits };
 writeFileSync(join(out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 const line = `cert-review evidence: PASS head run ${h.id} (${h.conclusion}, ${manifest.head.artifacts.length} artifacts), base ${b ? `run ${b.id} at ${b.head_sha.slice(0, 12)} (${b.conclusion}, ${manifest.base.artifacts.length} artifacts)` : 'none'}`;
 console.log(line);
 summary(line);
-output({ reason: '' });
+output({ reason: '', hits: JSON.stringify({ count: hitCount, first: hits.slice(0, 20) }) });

@@ -200,6 +200,7 @@ jobs:
       id: ${{ steps.upload.outputs.artifact-id }}
       digest: ${{ steps.upload.outputs.artifact-digest }}
       reason: ${{ steps.fetch.outputs.reason }}
+      hits: ${{ steps.fetch.outputs.hits }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -387,6 +388,17 @@ jobs:
           EXPECT_DIGEST: ${{ needs.review.outputs.digest }}
         run: node .cert-tools/.github/cert-review/artifacts.mjs
 
+      - id: evidence
+        name: The run's only evidence artifact is the one the evidence job uploaded
+        if: inputs.evidence-workflow != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CERT_ARTIFACT_PREFIX: cert-review-evidence
+          EXPECT_ID: ${{ needs.evidence.outputs.id }}
+          EXPECT_DIGEST: ${{ needs.evidence.outputs.digest }}
+        run: node .cert-tools/.github/cert-review/artifacts.mjs
+
       - if: needs.review.outputs.id != ''
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -406,6 +418,8 @@ jobs:
           EVIDENCE_WANTED: ${{ inputs.evidence-workflow != '' }}
           EVIDENCE: ${{ needs.evidence.result }}
           EVIDENCE_REASON: ${{ needs.evidence.outputs.reason }}
+          EVIDENCE_HITS: ${{ needs.evidence.outputs.hits }}
+          EVIDENCE_ARTIFACT: ${{ steps.evidence.outcome }}
           CONCLUSION: ${{ needs.plan.outputs.conclusion }}
           TITLE: ${{ needs.plan.outputs.title }}
           SUMMARY: ${{ needs.plan.outputs.summary }}
