@@ -1,9 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import {
+  alert,
   anchors,
   api,
+  carriesSecret,
   commentBody,
   diffOf,
+  foreignWriters,
   globs,
   injections,
   MARKER,
@@ -11,6 +14,7 @@ import {
   output,
   place,
   quiet,
+  redact,
   reviewBody,
   setCheck,
   sha,
@@ -33,7 +37,10 @@ function verdictOf() {
     return { ok: false, problem: 'the verdict artifact is not the one the review job uploaded' };
   if (!env.VERDICT || !existsSync(env.VERDICT))
     return { ok: false, problem: 'the review left no verdict' };
-  return validate(readFileSync(env.VERDICT, 'utf8'), head);
+  const raw = readFileSync(env.VERDICT, 'utf8');
+  const secret = carriesSecret(raw, [env.GH_TOKEN, ...String(env.CERT_SECRETS ?? '').split('\n')]);
+  if (secret) return { ok: false, secret };
+  return validate(raw, head);
 }
 
 async function tidy() {
@@ -99,7 +106,7 @@ async function postReview({ conclusion, title, text, comments, files }) {
   const counts = { fail: 0, known: 0, note: 0 };
   for (const c of comments) counts[c.severity]++;
   const reviewEvent = conclusion === 'failure' ? 'REQUEST_CHANGES' : 'COMMENT';
-  const body = (f) => reviewBody({ title, summary: text, head, runUrl, counts, folded: f });
+  const body = (f) => redact(reviewBody({ title, summary: text, head, runUrl, counts, folded: f }));
   try {
     await gh.call(`pulls/${n}/reviews`, 'POST', {
       commit_id: head,
@@ -109,7 +116,7 @@ async function postReview({ conclusion, title, text, comments, files }) {
         path: c.path,
         line: c.line,
         side: c.side,
-        body: commentBody(c),
+        body: redact(commentBody(c)),
       })),
     });
     console.log(
@@ -160,10 +167,16 @@ async function publish(r, files) {
 async function reviewed() {
   const files = diffOf(base, head);
   const found = [
-    ...injections(files, globs(env.GUARD_PATHS)),
+    ...injections(files, globs(env.GUARD_PATHS), globs(env.INJECTION_ALLOW ?? '')),
     ...opaque(files, globs(env.QUIET), globs(env.LOUD)),
   ];
   const v = verdictOf();
+  if (v.secret)
+    return {
+      conclusion: 'failure',
+      title: 'incomplete: verdict carries a secret',
+      text: `The verdict was withheld because it carries ${v.secret}. Nothing from it is posted.`,
+    };
   const r = conclude(found, v.ok ? v.value : null, v.problem);
   await publish(r, files);
   return r;
@@ -183,7 +196,7 @@ async function decided() {
     };
   if (plan.conclusion !== 'success') return plan;
   const files = diffOf(base, head);
-  const found = injections(files, globs(env.GUARD_PATHS));
+  const found = injections(files, globs(env.GUARD_PATHS), globs(env.INJECTION_ALLOW ?? ''));
   if (!found.length) {
     if (await current()) await tidySafely();
     return plan;
@@ -211,6 +224,30 @@ try {
     text: `The verdict could not be posted (${err.message.slice(0, 300)}).`,
   };
 }
+try {
+  const foreign = await foreignWriters(gh, head, {
+    event: env.GITHUB_EVENT_NAME === 'pull_request' ? ['pull_request'] : ['pull_request_target'],
+    job: 'post',
+    repo: env.GITHUB_REPOSITORY,
+  });
+  if (foreign.length) {
+    const how = await alert(gh, head, foreign, runUrl);
+    console.log(
+      `::error title=cert-review::another workflow wrote cert-review on ${head} (alert issue ${how})`
+    );
+    r = {
+      conclusion: 'failure',
+      title: 'another workflow wrote cert-review',
+      text: `Check runs named cert-review on this head that this workflow did not write: ${foreign.map((f) => `${f.url} (${f.reason})`).join('; ')}.`,
+    };
+  }
+} catch (err) {
+  r = {
+    conclusion: 'failure',
+    title: 'incomplete: writer check; re-run',
+    text: `Listing the cert-review check runs on this head failed (${err.message.slice(0, 200)}).`,
+  };
+}
 await setCheck(gh, {
   pr: n,
   head,
@@ -218,7 +255,7 @@ await setCheck(gh, {
   runUrl,
   conclusion: r.conclusion,
   title: r.title,
-  summary: quiet(r.text),
+  summary: redact(quiet(r.text)),
 });
 output({ checked: 'true', conclusion: r.conclusion });
 const line = `cert-review: ${r.conclusion} on ${head} (#${n}): ${r.title}`;

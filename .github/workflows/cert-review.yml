@@ -29,6 +29,10 @@ on:
           .github/workflows/**
           .github/actions/**
           scripts/cert/**
+      injection-allow:
+        description: Globs (test fixtures) where reviewer-aimed text is expected; read from main's caller, so a pull request can't add itself
+        type: string
+        default: ''
       approval-label:
         description: The coordinator's head-bound approval label that cert-self-guard reads
         type: string
@@ -61,10 +65,11 @@ env:
   CERT_WORKFLOW: ${{ inputs.workflow }}
   CERT_TOOLS_REF: ${{ inputs.tools-ref }}
   CERT_MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
+  INJECTION_ALLOW: ${{ inputs.injection-allow }}
   FALLBACK: |
     const e = process.env;
     const run = `${e.GITHUB_SERVER_URL}/${e.GITHUB_REPOSITORY}/actions/runs/${e.GITHUB_RUN_ID}`;
-    const body = { name: 'cert-review', head_sha: e.HEAD_SHA, external_id: `v2:${e.PR}:${e.HEAD_SHA}:${e.GITHUB_RUN_ID}`, details_url: run, status: 'completed', conclusion: 'failure', completed_at: new Date().toISOString(), output: { title: `incomplete: ${e.STAGE}; re-run`, summary: `cert-review did not finish its ${e.STAGE}: re-run the failed jobs (${run}).` } };
+    const body = { name: 'cert-review', head_sha: e.HEAD_SHA, external_id: `v2:${e.PR}:${e.HEAD_SHA}:${e.GITHUB_RUN_ID}:${e.GITHUB_RUN_ATTEMPT}`, details_url: run, status: 'completed', conclusion: 'failure', completed_at: new Date().toISOString(), output: { title: `incomplete: ${e.STAGE}; re-run`, summary: `cert-review did not finish its ${e.STAGE}: re-run the failed jobs (${run}).` } };
     const r = await fetch(`${e.GITHUB_API_URL}/repos/${e.GITHUB_REPOSITORY}/check-runs`, { method: 'POST', headers: { authorization: `Bearer ${e.GH_TOKEN}`, accept: 'application/vnd.github+json' }, body: JSON.stringify(body) });
     console.log(`cert-review: failure on ${e.HEAD_SHA} (incomplete: ${e.STAGE}), HTTP ${r.status}`);
     process.exit(1);
@@ -213,6 +218,17 @@ jobs:
           schema=$(node -e 'process.stdout.write(JSON.stringify(require("./.cert-tools/.github/cert-review/verdict.schema.json")))')
           echo "schema=$schema" >> "$GITHUB_OUTPUT"
 
+      - name: The review step's environment holds no GitHub token (names only)
+        env:
+          AWS_REGION: ${{ vars.CERT_AWS_REGION || 'us-west-2' }}
+        run: |
+          names=$(env | cut -d= -f1 | sort -u)
+          printf '%s\n' "$names" | tr '\n' ' '
+          echo
+          bad=$(printf '%s\n' "$names" | grep -Ex 'GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN|ACTIONS_ID_TOKEN_REQUEST_URL' || true)
+          if [ -n "$bad" ]; then echo "review-env: FAIL $bad"; exit 1; fi
+          echo "review-env: PASS no GitHub or Actions token among the step's variables"
+
       - id: claude
         name: Review, read-only, without a token that can write
         continue-on-error: true
@@ -259,6 +275,7 @@ jobs:
       contents: read
       actions: read
       checks: write
+      issues: write
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -306,6 +323,7 @@ jobs:
         name: Validate the verdict, post the review, set the cert-review check
         env:
           GH_TOKEN: ${{ github.token }}
+          CERT_SECRETS: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           ARTIFACTS: ${{ steps.artifacts.outcome }}
           VERDICT: ${{ runner.temp }}/verdict/verdict.json
           KIND: ${{ needs.plan.outputs.kind }}
@@ -333,6 +351,7 @@ jobs:
       contents: read
       actions: read
       checks: write
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

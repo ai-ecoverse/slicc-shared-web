@@ -158,6 +158,7 @@ jobs:
       contents: read
       actions: read
       checks: write
+      issues: write
       pull-requests: write
     with:
       tools-ref: <the same sha>
@@ -174,6 +175,10 @@ jobs:
 - **Job names:** the caller's job may have any name; the merge group matches the called jobs by their ` / post`, ` / plan` and ` / self-guard` suffixes.
 - **Security boundary:** `pull_request_target` runs main's caller, prompt and post code, so a pull request can't change its own cert path. Every workflow and action is in the default guard paths, so a pull request can't add its own check writer without the coordinator's `cert-review-approved`. The merge group accepts only runs of the caller's path on `pull_request_target`.
 - **Bootstrap (one pull request per repo, no ruleset flip):** the switching pull request's caller also lists `pull_request:` with the same types, in a concurrency group of its own (`cert-review-leg-<n>`), so the two legs never cancel each other. While main's caller has no `pull_request_target`, that leg certifies the switching pull request with its own code (under the coordinator's label) and the merge group accepts its run. Once main has it, the leg is a no-op and only `pull_request_target` runs count. A follow-up removes the leg.
+- **Secrets never get posted:** post withholds any verdict that carries a value this run holds (the Bedrock key, the job token; raw, JSON-escaped, base64, base64url, hex or URL-encoded) or a known token shape (`gh[pousr]_`, `github_pat_`, `AKIA`/`ASIA`, `ABSK`, a JWT, a PEM block): the check is `incomplete: verdict carries a secret` and nothing is posted. Other long mixed-case runs (a lockfile's sha512 integrity, a base64 quote) are redacted in place and posted.
+- **A second writer fails closed:** post and the merge group list every `cert-review` check run on the head; one from another app, one whose `external_id` names no run of the caller on the right event and head, a duplicate for one run, or one whose conclusion its run's post job contradicts, fails the check and opens one alert issue.
+- **The injection scan** (code, on added lines outside the guard paths): bidirectional and zero-width controls and text aimed at the reviewer (a `"verdict": "pass"` literal, "as the cert reviewer", generic override phrases that name the reviewer or verdict) force a failure; generic phrases alone ("system prompt", "ignore previous instructions") are a note, and the review is told those lines are suspect. `injection-allow` (globs, read from main's caller, so guard-protected) exempts test fixtures from the aimed rule; controls are never exempt.
+- **The one label:** `cert-review-approved` is the single exception to "no labels" (PM, provisional): it applies only to pull requests that change the certifier, it can't turn a failure into a pass (success needs the guard's approval and a pass verdict), and the approver is an agent. Dropping it is the `approval-label` input plus the guard step, with nothing else depending on it.
 - **Releases** carry no cert line: merged on main means certified; supply-chain provenance stays a code-only check in each repo.
 
 ## Which unit tests a commit runs
