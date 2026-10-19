@@ -45,6 +45,22 @@ on:
         description: The largest annotated diff one review reads in full
         type: number
         default: 15000
+      evidence-workflow:
+        description: The caller's CI workflow file (for example ci.yml) whose pull_request run on the head, and push run on the base branch, the review reads as evidence; empty for none. It is part of the cert path
+        type: string
+        default: ''
+      evidence-artifacts:
+        description: Names (globs) of that workflow's artifacts to fetch, bound by id and digest
+        type: string
+        default: ''
+      evidence-wait-minutes:
+        description: How long the evidence job waits for the head's run to finish (at most 200; the job times out at 240)
+        type: number
+        default: 120
+      evidence-max-mb:
+        description: The most artifact bytes the evidence job fetches (zipped), across both sides
+        type: number
+        default: 200
       light-runner:
         description: runs-on for every job (empty uses vars.CERT_LIGHT_RUNNER, then ubuntu-latest)
         type: string
@@ -171,10 +187,62 @@ jobs:
           RECEIPT: ${{ needs.guard.outputs.receipt }}
         run: node .cert-tools/.github/cert-review/plan.mjs
 
+  evidence:
+    name: evidence
+    needs: plan
+    if: needs.plan.outputs.kind == 'review' && github.event.pull_request.head.repo.full_name == github.repository && inputs.evidence-workflow != ''
+    runs-on: ${{ inputs.light-runner || vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      id: ${{ steps.upload.outputs.artifact-id }}
+      digest: ${{ steps.upload.outputs.artifact-digest }}
+      reason: ${{ steps.fetch.outputs.reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.sha || github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ai-ecoverse/slicc-shared-web
+          ref: ${{ inputs.tools-ref }}
+          path: .cert-tools
+          sparse-checkout: .github/cert-review
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+
+      - id: fetch
+        name: The evidence workflow's runs on the head and the base, their artifacts bound by id and digest (no pull-request code runs here)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CERT_EVIDENCE_WORKFLOW: ${{ inputs.evidence-workflow }}
+          CERT_EVIDENCE_ARTIFACTS: ${{ inputs.evidence-artifacts }}
+          CERT_EVIDENCE_WAIT: ${{ inputs.evidence-wait-minutes }}
+          CERT_EVIDENCE_MAX_MB: ${{ inputs.evidence-max-mb }}
+          CERT_EVIDENCE_DIR: ${{ runner.temp }}/evidence
+        run: node .cert-tools/.github/cert-review/evidence.mjs
+
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cert-review-evidence
+          path: ${{ runner.temp }}/evidence/
+          if-no-files-found: error
+          include-hidden-files: true
+          overwrite: true
+
   review:
     name: review
-    needs: plan
-    if: needs.plan.outputs.kind == 'review' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: [plan, evidence]
+    if: ${{ !cancelled() && needs.plan.outputs.kind == 'review' && github.event.pull_request.head.repo.full_name == github.repository && (needs.evidence.result == 'success' || (needs.evidence.result == 'skipped' && inputs.evidence-workflow == '')) }}
     runs-on: ${{ inputs.light-runner || vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
@@ -206,11 +274,19 @@ jobs:
         with:
           node-version: 24
 
+      - if: inputs.evidence-workflow != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.evidence.outputs.id }}
+          path: ${{ runner.temp }}/cert/evidence
+          digest-mismatch: error
+
       - id: diff
         name: The annotated diff and main's prompt
         shell: bash
         env:
           CERT_DIR: ${{ runner.temp }}/cert
+          CERT_EVIDENCE_DIR: ${{ inputs.evidence-workflow != '' && format('{0}/cert/evidence', runner.temp) || '' }}
           CERT_PROMPT: .cert-tools/.github/cert-review/frame.txt
           CERT_RULES: ${{ inputs.rules }}
         run: |
@@ -267,7 +343,7 @@ jobs:
 
   post:
     name: post
-    needs: [plan, review]
+    needs: [plan, evidence, review]
     if: ${{ !cancelled() && needs.plan.result != 'skipped' && needs.plan.outputs.kind != 'noop' }}
     runs-on: ${{ inputs.light-runner || vars.CERT_LIGHT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
@@ -327,6 +403,9 @@ jobs:
           ARTIFACTS: ${{ steps.artifacts.outcome }}
           VERDICT: ${{ runner.temp }}/verdict/verdict.json
           KIND: ${{ needs.plan.outputs.kind }}
+          EVIDENCE_WANTED: ${{ inputs.evidence-workflow != '' }}
+          EVIDENCE: ${{ needs.evidence.result }}
+          EVIDENCE_REASON: ${{ needs.evidence.outputs.reason }}
           CONCLUSION: ${{ needs.plan.outputs.conclusion }}
           TITLE: ${{ needs.plan.outputs.title }}
           SUMMARY: ${{ needs.plan.outputs.summary }}

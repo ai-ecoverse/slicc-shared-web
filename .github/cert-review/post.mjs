@@ -165,6 +165,12 @@ async function publish(r, files) {
 }
 
 async function reviewed() {
+  if (env.EVIDENCE_WANTED === 'true' && env.EVIDENCE !== 'success')
+    return {
+      conclusion: 'failure',
+      title: `incomplete: evidence; re-run`,
+      text: `The review's CI evidence was not fetched (${env.EVIDENCE || 'missing'}${env.EVIDENCE_REASON ? `: ${env.EVIDENCE_REASON}` : ''}). Not certified; re-run when the evidence workflow has finished.`,
+    };
   const files = diffOf(base, head);
   const found = [
     ...injections(files, globs(env.GUARD_PATHS), globs(env.INJECTION_ALLOW ?? '')),
