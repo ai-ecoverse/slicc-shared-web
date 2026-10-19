@@ -137,8 +137,8 @@ function contextOf(sessions, parents, sessionId) {
 export function caused({ callFrames = [], hitBreakpoints = [] }, target = {}, exits = new Map()) {
   const [top] = callFrames;
   if (!top) return false;
-  const unloaded = target.type === 'page' && callFrames.length === 1;
-  if (unloaded && top.functionName === unloading && top.url === '') return true;
+  const unloaded = target.type === 'page' && top.url === '';
+  if (unloaded && top.functionName === unloading) return true;
   const lines = hitBreakpoints.length > 0 ? exits.get(pathOf(top.url)) : undefined;
   return Boolean(lines?.includes(top.location.lineNumber));
 }
@@ -319,7 +319,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
       const { exception, text } = params.exceptionDetails;
       log(sessionId, `uncaught ${exception?.description ?? text}`);
     }
-    if (method.startsWith('Debugger.')) own.watch(sessionId);
+    if (method?.startsWith('Debugger.')) own.watch(sessionId);
     if (method === 'Debugger.paused') {
       pauses.set(sessionId, pauseOf(sessions.get(sessionId), params));
       const target = sessions.get(sessionId);
