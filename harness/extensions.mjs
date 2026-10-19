@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import { join, normalize, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export function extensionId(input) {
   const hex = createHash('sha256').update(input).digest('hex').slice(0, 32);
@@ -32,4 +33,34 @@ export async function install(cdp, found) {
     const { id } = await cdp.send('Extensions.loadUnpacked', { path: root.slice(0, -1) });
     if (id !== expected) found.set(id, root);
   }
+}
+
+export const BUILTIN_PATH = fileURLToPath(new URL('./extension', import.meta.url));
+export const BUILTIN_ID = 'ankmbodmgimjemnojmeddfcdlbocolob';
+export const OPT_OUT = 'SLICC_HARNESS_EXTENSION';
+
+export function builtinWanted(option, env) {
+  const value = env[OPT_OUT];
+  if (value !== undefined && value !== '0' && value !== '1') {
+    throw new Error(
+      `${OPT_OUT} is ${JSON.stringify(value)}; set it to 0 to leave the harness extension out, or 1 (or unset) to load it`
+    );
+  }
+  if (option !== true && option !== false) {
+    throw new Error(
+      `launch({ extension }) is ${JSON.stringify(option)}; pass false to leave the harness extension out`
+    );
+  }
+  return option && value !== '0';
+}
+
+export async function installBuiltin(cdp) {
+  const { id } = await cdp.send('Extensions.loadUnpacked', {
+    path: BUILTIN_PATH,
+    enableInIncognito: true,
+  });
+  if (id !== BUILTIN_ID) {
+    throw new Error(`the harness extension loaded as ${id}, not ${BUILTIN_ID}`);
+  }
+  return { id, path: BUILTIN_PATH };
 }
