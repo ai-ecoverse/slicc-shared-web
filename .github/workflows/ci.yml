@@ -63,10 +63,20 @@ jobs:
         run: |
           npm install --no-save --no-audit --no-fund "monocart-coverage-reports@$MCR"
           node -p 'require("monocart-coverage-reports/package.json").version'
-          npx --no-install playwright-core install --no-shell chromium
+          npx --no-install slicc-cdp install-browser
           xvfb-run -a node --test test/integration/recorder.test.mjs test/integration/unit-cover.test.mjs
 
-  test:
-    uses: ./.github/workflows/node-ci.yml
+  pipeline:
+    if: github.event_name != 'push'
+    uses: ./.github/workflows/pipeline.yml
+    secrets: inherit
+    permissions:
+      contents: write
+      actions: read
+      issues: write
+      pull-requests: write
+      statuses: write
+      id-token: write
     with:
       test: xvfb-run -a npm test
+      shards: 1

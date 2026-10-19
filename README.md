@@ -5,7 +5,7 @@ Configuration shared by SLICC's web repos ([slicc-bios](https://github.com/ai-ec
 | File | What it is | How a repo uses it |
 |---|---|---|
 | `default.json` | Root Renovate preset: automerge on, one dependency per PR, exact pins, 7-day release age (14 for majors, 0 for vulnerability fixes and for our own `@ai-ecoverse` packages and `github.com/ai-ecoverse/*` Go modules, which also jump the PR queue), `<upstream>-<build>` versions of our own `@ai-ecoverse` packages, such as `9.12.0-6`, which Renovate would otherwise skip as prereleases, never past the npm `latest` dist-tag (only `<upstream>-slicc.<n>` ones for `@ai-ecoverse/fnox` and its `@ai-ecoverse/fnox-*` platform packages), one PR each, majors included, for the certified pairs `@ai-ecoverse/slicc-kernel` + `@ai-ecoverse/wasi-pnpm` ("kernel and pnpm") and `@ai-ecoverse/wasm-coreutils` + `@ai-ecoverse/wasm-procps` ("coreutils and procps"), `go mod tidy` after every Go module update (plus import-path rewrites on majors), a manager for jsDelivr pins inside `src/`, and one for [`# renovate:` annotated pins in workflow files](#versions-pinned-in-workflow-files) | `renovate.json`: `{ "extends": ["github>ai-ecoverse/slicc-shared-web"] }` |
-| `.github/workflows/node-ci.yml` | Reusable CI: `npm ci`, lint, Chromium's system libraries, integration tests, hotspots and the stack of every crash dump in the job summary, coverage/profiles/screenshots/crash dumps as artifacts. The browser itself comes from each repo's `pretest` | `jobs: { ci: { uses: ai-ecoverse/slicc-shared-web/.github/workflows/node-ci.yml@vX.Y.Z } }` |
+| `.github/workflows/pipeline.yml` | The one reusable workflow, described [below](#pipeline): lint on every event; on pull requests and in the merge queue a staging deploy (if any) and sharded integration tests; on pull requests a Claude and a Codex review; on `main` a release | `jobs: { ci: { uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@vX.Y.Z, secrets: inherit } }` |
 | `biome.json` | Formatter settings and slicc's strict linter: cognitive complexity ≤ 25, functions ≤ 150 lines, no unused variables or imports, no floating or misused promises, naming conventions, `import type`/`export type`. Test files under `test/` get slicc's test exemptions | `biome.json`: `{ "extends": ["@ai-ecoverse/slicc-shared-web/biome"] }` |
 | `tsconfig.json` | TypeScript base for Node's type stripping | `tsconfig.json`: `{ "extends": "@ai-ecoverse/slicc-shared-web/tsconfig.json", "include": ["src/**/*.ts"] }` |
 | `lefthook.yml` | Pre-commit hooks: Biome, typecheck, no comments, no unit tests in git, AGENTS.md, and diff coverage over [only the unit tests the change reaches](#which-unit-tests-a-commit-runs) | `lefthook.yml`: `extends: [node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml]` |
@@ -20,7 +20,99 @@ Install it from npm, and pin the reusable workflow to the matching `vX.Y.Z` tag.
 npm install --save-dev --save-exact @ai-ecoverse/slicc-shared-web
 ```
 
-The hooks expect two scripts in each repo: `test:unit`, which writes `coverage/unit/lcov.info` (unit tests stay out of git), and, in TypeScript repos, `typecheck`. The reusable workflow expects `lint`, plus `test` for the integration tests, with a `pretest` that installs Chromium (`slicc-cdp install-browser --version <x.y.z.w>`, or `playwright-core install --no-shell chromium`). Its inputs `lint`, `test`, `chromium`, `chromium-cache` and `node-version` override those, and `timeout-minutes` (20 by default) gives a long job, such as a background-tab measurement, more time. `runs-on` (`ubuntu-latest` by default) picks the runner label, such as a self-hosted pool or one an earlier job chose; the caller decides which runner may run which code, so a fork's pull request should stay on a GitHub-hosted runner. With `chromium` on, Chromium's system libraries are installed with `playwright-core install-deps` only where it runs as root or `sudo -n true` works; on a runner without root (one with "no new privileges", say) the step is skipped with a notice and the image must already ship them. The `pretest` download needs no root either way. With `chromium` on, the workflow also caches Playwright's browser directory (`~/.cache/ms-playwright`, or `$PLAYWRIGHT_BROWSERS_PATH`) with `actions/cache`, keyed on the runner's OS and architecture and the `playwright-core` version in `package-lock.json`, so a warm `pretest` skips the download and a `playwright-core` bump starts a fresh cache. A repo without `playwright-core` in its lockfile gets no cache; `chromium-cache: false` turns it off. The diff-coverage hook runs `diff-cover` through `uvx`, so install [uv](https://docs.astral.sh/uv/) once.
+The hooks expect two scripts in each repo: `test:unit`, which writes `coverage/unit/lcov.info` (unit tests stay out of git), and, in TypeScript repos, `typecheck`. The pipeline expects `lint` and `test`, and `@ai-ecoverse/slicc-cdp` as a devDependency for Chrome; see [Pipeline](#pipeline). The diff-coverage hook runs `diff-cover` through `uvx`, so install [uv](https://docs.astral.sh/uv/) once.
+
+## Pipeline
+
+`.github/workflows/pipeline.yml` is a repo's whole CI and release. One caller workflow runs it on every event:
+
+```yaml
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+  issues: write
+  pull-requests: write
+  statuses: write
+  id-token: write
+
+jobs:
+  ci:
+    uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@vX.Y.Z
+    secrets: inherit
+```
+
+| Job | Pull request | Merge queue | `main` |
+|---|---|---|---|
+| `lint`: `npm ci`, then `lint` | ✓ | ✓ | ✓ |
+| `deploy`: `deploy` in the `staging` environment, only when the input is set | ✓ | ✓ | |
+| `test` (one per shard) and `integration`, the check to require | ✓ | ✓ | |
+| `context`, `review` (Claude and Codex) and `post` | ✓ | | |
+| `release`: `semantic-release` | | | ✓ |
+
+**Lint** fails the run, and nothing after it starts.
+
+**Deploy** runs the `deploy` command with every secret the caller passes as an environment variable. The command writes `url=<staging URL>` to `$GITHUB_OUTPUT`; the tests and the reviewers get it as `STAGING_URL`.
+
+**Integration tests** install Chrome for Testing with `slicc-cdp install-browser --with-deps` (`--version` from the `chrome` input, stable without it), then split the files matching `test-glob` across `shards` jobs by their timings, with [split-tests-by-timings](https://github.com/marketplace/actions/split-tests-by-timings). The timings are the JUnit reports of the latest completed run of the same workflow; without one, the split is by count. Each shard runs the repo's own `test` command unchanged: `harness/shard.cjs`, preloaded through `NODE_OPTIONS`, makes the outermost `node --test` run only the shard's files that its own patterns match, writes `junit/<shard>.xml` next to the usual spec output, and then takes itself out of the environment, so a `node --test` that a test starts runs as it would without it. Each shard uploads `coverage/`, `artifacts/` and `junit/` as `integration-<shard>`. `integration` passes only when every shard did, so it is the one check to require, under the caller's job name (`ci / integration`). A suite whose last step reads every test's artifacts, as this repo's `verify.mjs` does, sets `shards: 1`.
+
+**Review** runs twice, once with [claude-code-action](https://github.com/anthropics/claude-code-action) and once with [codex-action](https://github.com/openai/codex-action), on the same prompt, whether the tests passed or not. Its job token can only read. It gets:
+
+- `head/` and `base/`, the pull request's two trees, each after `npm ci`;
+- `review/integration/`, every shard's artifact;
+- `review/context/`, from the `context` job: the pull request with its comments, reviews and diff, the repo's issues and recent pull requests;
+- `review/browsers.json`: four headless Chrome instances on one machine, `head` and `base` each linked through the extension and through slicc-cli, on CDP ports 9301 to 9304. For each one the job runs `review-browser` (by default `npm run --if-present review:browser`) in that side's tree with `SLICC_REVIEW_SIDE` (`head` or `base`), `SLICC_REVIEW_LINK` (`extension` or `cli`) and `SLICC_REVIEW_CDP`, so the repo loads its own build into that browser;
+- `review-prompt`, appended to the shared prompt.
+
+Each reviewer answers with `findings.json`, held to one JSON schema:
+
+```json
+{
+  "verdict": "approved",
+  "summary": "…",
+  "comments": [{ "path": "src/a.ts", "line": 12, "body": "…" }],
+  "issues": [{ "repo": "ai-ecoverse/slicc-cdp", "title": "…", "body": "…" }]
+}
+```
+
+**Post** is the only job that writes to GitHub. Per reviewer it sets the commit status `review / claude` or `review / codex` (`success` for `approved`, `failure` for `denied`, `error` without findings), comments the verdict and summary on the pull request, posts each comment on its line (or, for a line outside the diff, as a pull request comment naming it) and opens each issue. An issue in another repo needs `SLICC_ISSUES_TOKEN`, a token that can open issues there.
+
+**Release** runs `semantic-release` after lint, without any test: what reached `main` went through the merge queue.
+
+| Input | Default | |
+|---|---|---|
+| `node-version` | `24` | |
+| `runs-on` | `ubuntu-latest` | every job but `integration`, `context` and `post` |
+| `timeout-minutes` | `20` | `lint`, `deploy`, each shard and `release`; a review gets 60 |
+| `lint` | `npm run lint` | |
+| `chrome` | stable | a Chrome for Testing version for `slicc-cdp install-browser` |
+| `test` | `npm test` | `xvfb-run -a npm test` for a headed suite |
+| `test-glob` | `test/integration/**/*.test.mjs` | the files to split |
+| `shards` | `4` | |
+| `deploy` | none | a command that deploys to staging |
+| `review-browser` | `npm run --if-present review:browser` | |
+| `review-prompt` | none | |
+
+| Secret | Used by |
+|---|---|
+| `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` | the Claude review |
+| `OPENAI_API_KEY` | the Codex review |
+| `SLICC_ISSUES_TOKEN` | issues in other repos |
+| anything else | `deploy`, as environment variables |
+
+Coming from `node-ci.yml` and `node-release.yml`, both removed with `.github/actions/cert-self-guard`:
+
+- The caller workflow above replaces the repo's CI, release and certification workflows.
+- npm trusted publishing names the calling workflow, so `fledgling.workflow` in `package.json` becomes the caller's file name (`ci.yml`), and `npm run trust` registers it again.
+- A ruleset requires `ci / integration`. The merge queue checks the same list, so a required `review / …` status would hold it; leave those required on pull requests only, or not at all.
+- `pretest` installs Chrome with `slicc-cdp install-browser`, and `playwright-core` can go.
 
 ## Rules every repo follows
 
@@ -66,143 +158,14 @@ Pin only where a fixed version is genuinely needed. When a workflow rolls forwar
 
 ## Memory peak
 
-The reusable workflow's last step, which runs even when an earlier one failed, writes one line to the log and the job summary. It gives the job's memory peak and limit in MiB, `nproc` and the runner's name, so a runner that later "lost communication" can be compared with the peak of the same job's good runs. The numbers come from cgroup v2 (`memory.peak`, `memory.max`), from the job's own cgroup first and then the root one, or else from cgroup v1 (`memory.max_usage_in_bytes`, `memory.limit_in_bytes`), and the line names the file each one came from. A value it can't read is `n/a`, and the step never fails the job. A repo whose `@ai-ecoverse/slicc-shared-web` predates the script still gets `nproc` and the runner name.
+`slicc-memory-peak` writes one line to the log and the job summary. It gives the job's memory peak and limit in MiB, `nproc` and the runner's name, so a runner that later "lost communication" can be compared with the peak of the same job's good runs. The numbers come from cgroup v2 (`memory.peak`, `memory.max`), from the job's own cgroup first and then the root one, or else from cgroup v1 (`memory.max_usage_in_bytes`, `memory.limit_in_bytes`), and the line names the file each one came from. A value it can't read is `n/a`, and the step never fails the job. A repo whose `@ai-ecoverse/slicc-shared-web` predates the script still gets `nproc` and the runner name.
 
-A workflow of its own (not this reusable one) gets the same line from the composite action, as its last step:
+A workflow gets the line from the composite action, as its last step:
 
 ```yaml
       - uses: ai-ecoverse/slicc-shared-web/.github/actions/memory-peak@<tag or sha>
         if: always()
 ```
-
-## Certification self-guard
-
-`.github/actions/cert-self-guard` is a shared composite action for PR certification lanes. It inspects the PR's diff against its base (both paths of a rename included) and rejects certification-path edits with `cert-review: needs coordinator review` unless `cert-review-approved` was applied after the current head **arrived at GitHub** by a user whose GitHub repository permission is **admin or maintain**. The arrival time is the earliest `created_at` from `commits/{sha}/check-suites`, or, if unavailable, the PR timeline's latest matching head-push event. If neither server-side source is available, approval is `INCOMPLETE`. The client-controlled committer date is retained only as information in the receipt; it never authorizes approval. Write permission is not enough. It reads the label application from the issue timeline and checks the labeler's current permission through the API, rather than trusting the event sender or the label's presence alone. Removing and reapplying the label replaces the approval event; an old application cannot qualify. Missing git history, API errors, stale heads, ambiguous group membership and truncated timeline evidence fail closed as `INCOMPLETE`.
-
-The guard's assumption is that **workers never apply or remove `cert-review-approved`; only a lane coordinator does, after reading the certification-path change**. The permission API cannot distinguish a coordinator from a worker: all agents act as `trieloff`, an admin. Coordinator-only labelling is therefore a **procedural assumption**, not something the permission check enforces. Approval is **head-bound, cleared on any later push**. On `synchronize`, the guard compares the latest label application with the current head's server-side arrival before invalidating it. An old application (not newer than that arrival) is removed automatically and a touched PR is blocked until its new head is approved. If the coordinator already approved the new head after the push but before a delayed synchronize job starts, the label is **kept** and the ordinary admin/maintain permission check still applies. A permission lookup failure leaves that newer label in place but returns `INCOMPLETE`; keeping the label is not itself approval. If arrival/timing evidence is unavailable, the guard conservatively removes the label, returns `INCOMPLETE`, and records that reason. This is deliberately strict even when the PR does not touch certification paths: a present label with unknown timing is still invalidated and returns `INCOMPLETE`. A known stale label on an untouched PR is removed without blocking that PR (`PASS`). A failed removal is also red `INCOMPLETE`. This automated invalidation is not permission for workers to change the label manually. Re-running an old synchronize event does not clear a newer head-bound approval.
-
-On `merge_group`, the guard walks the first-parent merge ancestry from `head_sha` back to `base_sha`, resolves each merge's second parent to exactly one open PR, and inspects that member's actual merged delta. It checks approval against that queued head, not just whatever head the PR API currently returns. A moved head, an unexplained non-merge commit or an unapproved certification-path PR makes the group red. This assumes the queue's **merge-commit method** with two-parent synthetic merges; squash/rebase or any other unexplained ancestry fails closed. It does not call an LLM or run candidate code.
-
-Callers use **one external `uses:` line pinned to a full commit SHA**, not a local action path or the PR's checkout. The composite executes its script from `github.action_path`, the downloaded pinned action directory. Each lane supplies one newline-separated `paths` list covering its certification workflows, reviewer/classifier/record tools and runners. The default list covers `.github/workflows/cert*.yml`, `.github/workflows/cert*.yaml`, `scripts/cert/**`, `tools/cert-review/**` and `.github/actions/cert-self-guard/**`. Inclusive repository-relative globs are matched fail-closed, with dot semantics: a path counts as touched when Node's `path.matchesGlob` matches it, when the glob matches it with `**` crossing dot segments and `*` matching a leading dot (`dotGlob` in `changes.mjs`), or, for a literal `X/**` glob, when it starts with `X/`. So `tools/cert-review/.npmrc` and `scripts/cert/a/.b/c.mjs` need the label too; `matchesGlob` alone skips them. Negations are not supported. Include the caller's **entire cert workflow**, so changing the guard's own `uses:` line or pinned SHA is itself guarded. An empty or invalid list fails closed.
-
-```yaml
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
-  merge_group:
-    types: [checks_requested]
-
-permissions:
-  contents: read
-  checks: read
-  pull-requests: write
-
-steps:
-  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-    with:
-      ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.head_sha }}
-      fetch-depth: 0
-      persist-credentials: false
-  - name: Fetch the exact trees to inspect, without executing them
-    env:
-      HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-      BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-    run: git fetch --no-tags origin "$BASE" "$HEAD"
-  - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-    with:
-      node-version: 24
-  - uses: ai-ecoverse/slicc-shared-web/.github/actions/cert-self-guard@<full-commit-sha>
-    with:
-      paths: |
-        .github/workflows/cert*.yml
-        .github/workflows/cert*.yaml
-        scripts/cert/**
-        tools/cert-review/**
-        scripts/cert-runner/**
-      approval-label: cert-review-approved
-```
-
-The caller uses the triggers shown above and runs this metadata-only step separately from candidate execution. It needs Node 24+, **`actions/checkout` with `fetch-depth: 0`** (for merge-base and group ancestry), complete local git objects for the exact base/head/group ancestry, `contents: read`, **`checks: read`** for server-side head-arrival evidence and **`pull-requests: write`** for automatic label invalidation. A failed DELETE is red `INCOMPLETE`; the integration suite covers a permission-denied DELETE. Use GitHub-hosted isolated runners for candidate build/test jobs, with read-only tokens, no secrets and `persist-credentials: false`. The guard neither executes their code nor needs review, signing or publishing credentials. No CODEOWNERS or code-owner ruleset requirement is imposed by this action.
-
-Outputs are `status` (`PASS`, `FAIL`, `INCOMPLETE`), `touched` and a structured JSON `receipt` containing the exact head(s), changed/guarded paths, approval event, labeler permission and reason. Every non-PASS result exits nonzero. The receipt and job summary include this precise limitation:
-
-> self-guard catches accidental cert-path edits; not enforced against a deliberate rewrite of the workflow
-
-A `pull_request` workflow can be deliberately rewritten to skip the guard, change its inputs or fabricate a status. This is an accidental-self-certification guard, **not** an organization-required-workflow security boundary. Pinning the action stops accidental use of the PR's implementation but does not force a candidate-controlled workflow to call it. Ruleset changes or an organization-required workflow are a separate owner decision.
-
-The committed public CLI integration regressions use real git repositories and a fake GitHub HTTP API. Run only this non-browser suite locally with `node --test test/integration/cert-self-guard.test.mjs`; CI also runs it with the full integration suite. It covers touched/untouched changes, a self-passing workflow/pin edit, rename paths, label timing against **server-side arrival** (including a backdated committer date), permission, approval followed by a push, delayed synchronize preserving a post-push approval, unknown arrival causing conservative invalidation, API refusal and groups containing an unapproved or stale PR.
-
-## Certification review (cert-review v2)
-
-`.github/workflows/cert-review.yml` is a reusable workflow that certifies every non-draft pull request into `main` and sets one **`cert-review` commit status** on its head (created by `github-actions[bot]`, its `target_url` the run attempt that wrote it, always `success` or `failure`). It is a commit status, not a check run: GitHub attaches a check run created with `GITHUB_TOKEN` to an older check suite, so a ruleset that requires it reports it as expected forever (B28, slicc-extension#133). The caller grants `checks: read` and `statuses: write`. It follows Lars's 2026-10-19 model: no approval or label gates (draft status decides), findings as line comments on the diff, an LLM that reads and never runs PR code, and a separate job that validates the closed verdict schema and posts it. The design note is `slicc-agent-plan/cert-review-v2.md`; the reference implementation is slicc-extension's (B28).
-
-A caller (`.github/workflows/cert-review.yml` in the repo, its only cert workflow):
-
-```yaml
-name: cert-review
-on:
-  pull_request_target:
-    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled, edited]
-  merge_group:
-permissions:
-  contents: read
-concurrency:
-  group: ${{ (((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'cert-review-approved') || (github.event.action == 'edited' && !github.event.changes.base)) && format('cert-review-noop-{0}', github.run_id) || format('cert-review-{0}-{1}', github.event_name == 'pull_request' && 'leg' || 'pr', github.event.pull_request.number || github.event.merge_group.head_sha) }}
-  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
-jobs:
-  cert:
-    name: cert
-    uses: ai-ecoverse/slicc-shared-web/.github/workflows/cert-review.yml@<sha>
-    permissions:
-      contents: read
-      actions: read
-      checks: read
-      statuses: write
-      issues: write
-      pull-requests: write
-    with:
-      tools-ref: <the same sha>
-      rules: scripts/cert/review.txt
-      loud: |
-        src/**
-    secrets:
-      AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
-```
-
-- **Ready and approval re-run themselves** (`cert-rerun.yml`): under an org "require workflows" ruleset, cert-review starts only on `opened`, `synchronize` and `reopened`, so marking a pull request ready, adding or removing `cert-review-approved`, or moving its base to `main` starts nothing. Each repository also has a small second caller (the workflow must not be named `cert-review`):
-
-  ```yaml
-  name: cert-rerun
-  on:
-    pull_request_target:
-      branches: [main]
-      types: [ready_for_review, labeled, unlabeled, edited]
-  permissions: {}
-  jobs:
-    rerun:
-      uses: ai-ecoverse/slicc-shared-web/.github/workflows/cert-rerun.yml@<sha>
-      permissions:
-        actions: write
-      with:
-        tools-ref: <the same sha>
-  ```
-
-  It runs only main's code (no checkout of the pull request) with `actions: write` and nothing else, so it never writes `cert-review`. It does nothing for a fork, a draft, a label other than the approval label (added or removed), or an edit that doesn't change the base. Otherwise it finds the newest run of the caller on the head for this pull request (`actions/runs?event=pull_request_target&head_sha=`, the caller's path or that path `@refs/heads/main`, a `workflows/` or `required_workflows/` URL of this repository) and re-runs all its jobs. A run still in progress read the pull request before this event (its plan decided draft or the guard read the label already, and post can only turn a pass into a failure), so it is cancelled first and then re-run. One cert-rerun runs per pull request at a time, and a run another event already re-ran is a skip. No run at all fails cert-rerun visibly (push, or close and reopen). The re-run's plan reads draft, base and fork from the live pull request and fails as incomplete if the head moved, and post sets success only while the pull request is open, ready, into `main` and at this head. No pull request needs a manual "re-run all jobs". Its runs are on another path, so plan, post and the merge group never count them as cert-review runs.
-- **Jobs** (`cert / …`): `self-guard` (cert-self-guard v1.24.2, pinned), `plan` (read-only: fork, draft, cert path, not behaviour, too large, or review), `review` (Claude on Bedrock with Read/Glob/Grep only, no Bash/Write/Web, structured output in `verdict.schema.json`, `contents: read`, the key in that step only), `post` (the only writer of `cert-review`: validates the verdict, re-anchors comments into diff hunks, posts one review, `REQUEST_CHANGES` on a failure, and runs a code-only prompt-injection and opaque-file scan that can only fail a pass), and `merge group` (code only: each member's newest run of the caller on its head must have certified it; it waits while that run is still queued or running, up to 7 minutes shared across the members, passes over finished noop runs only, and stops at the first member that isn't certified). GitHub API reads are retried on 5xx and network errors, and both fallbacks also run when a job is cancelled.
-- **CI evidence** (`evidence-workflow`, `evidence-artifacts`, optional): for a repository whose certification needs pull-request code to run (tests, scripted scenarios), that code runs in the repository's own CI workflow on `pull_request`, with no secrets and a read-only token, and uploads artifacts. The `evidence` job (`contents`/`actions: read`, no secrets, no pull-request code) waits up to `evidence-wait-minutes` for that workflow's newest `pull_request` run on the head (this repository, this pull request), takes the newest finished `push` run on the base branch at or behind the base, downloads the artifacts whose names match by id, checks each zip's sha256 against its digest, unpacks it into `<side>/<artifact id>/` without links, binary files and the head side's images (no code can scan an image's text; main's images stay) or more than four times `evidence-max-mb` in total, scans the head side's text for bidi or zero-width controls and reviewer-aimed text, and uploads one `cert-review-evidence` artifact that the review downloads by id. Post checks that the run's only evidence artifact has the evidence job's id and digest. The newest artifact of each name is taken, and only if it was made in the run's latest attempt; unsafe names are skipped. The prompt names both runs; the head side is data written by the pull request's code. A missing run, artifact or digest, or another evidence artifact, is `incomplete: evidence`, never a review; an injection hit in the evidence fails the check in code, except under `evidence-notes` (globs of `<artifact>/<path>` the caller marks as upstream data, such as a dependency tarball's diff), where it is a suspect note for the review. The evidence workflow is part of the cert path (every workflow is in the default guard paths).
-- **Code check** (`code-check`, optional): a command the `evidence` job runs from the caller's tree at main (on the bootstrap `pull_request` leg, the head's), after `npm ci --ignore-scripts`, with `BASE_SHA` (the merge base), `HEAD_SHA` (fetched as objects, never checked out on `pull_request_target`) and a read-only `GH_TOKEN`. A non-zero exit, or no result, is a fail finding in code with the output's verdict line; the full output is evidence for the review. slicc-bios runs its pin release-state this way, so the pull request's own code can't make it pass.
-- **The rules** file is the caller's own section of the prompt ("the repository and what to certify"), read from `main`; the frame around it (untrusted text, severity, tests, answer format) is shared in `.github/cert-review/frame.txt`. A missing rules file stops the review, which reads as `incomplete`.
-- **tools-ref** must be the sha in the caller's `uses:`; the plan reads the caller that runs (main's tip, `github.sha`, on `pull_request_target`) and fails closed on a mismatch. The rules and the review's workspace come from that same commit, not from the pull request's possibly stale `base.sha`; `base.sha` only anchors the diff.
-- **Job names:** the caller's job may have any name; the merge group matches the called jobs by their ` / post`, ` / plan` and ` / self-guard` suffixes.
-- **Security boundary:** `pull_request_target` runs main's caller, prompt and post code, so a pull request can't change its own cert path. Every workflow and action is in the default guard paths, so a pull request can't add its own check writer without the coordinator's `cert-review-approved`. The merge group accepts only runs of the caller's path on `pull_request_target`.
-- **Bootstrap (one pull request per repo, no ruleset flip):** the switching pull request's caller also lists `pull_request:` with the same types, in a concurrency group of its own (`cert-review-leg-<n>`), so the two legs never cancel each other. While main's caller has no `pull_request_target`, that leg certifies the switching pull request with its own code (under the coordinator's label) and the merge group accepts its run. Once main has it, the leg is a no-op and only `pull_request_target` runs count. A follow-up removes the leg.
-- **Secrets never get posted:** post withholds any verdict that carries a value this run holds (the Bedrock key, the job token; raw, JSON-escaped, base64, base64url, hex or URL-encoded) or a known token shape (`gh[pousr]_`, `github_pat_`, `AKIA`/`ASIA`, `ABSK`, a JWT, a PEM block): the check is `incomplete: verdict carries a secret` and nothing is posted. Other long mixed-case runs (a lockfile's sha512 integrity, a base64 quote) are redacted in place and posted.
-- **The last writer:** GitHub enforces the newest `cert-review` status, and any workflow's `GITHUB_TOKEN` with `statuses: write` writes as `github-actions[bot]`, so a status written *after* ours can't be caught by this workflow. A pull request can add such a workflow only under the coordinator's `cert-review-approved` (every workflow is a guard path), and the org "require workflows" ruleset makes the merge depend on this workflow's own run, not on the status (slicc-agent-plan/cert-review-v2-probe.md). Apply that ruleset per repository.
-- **A second writer fails closed:** post and the merge group list every `cert-review` status and check run on the head. A status not created by `github-actions[bot]`, or whose `target_url` isn't an attempt of a run of the caller on the right event and head, a check run from another app or whose `external_id` names no such run, a second write for one run attempt, or a state that the attempt's post (or merge group) job contradicts, fails the check and opens one alert issue.
-- **The injection scan** (code, on added lines outside the guard paths): bidirectional and zero-width controls and text aimed at the reviewer (a `"verdict": "pass"` literal, "as the cert reviewer", generic override phrases that name the reviewer or verdict) force a failure; generic phrases alone ("system prompt", "ignore previous instructions") are a note, and the review is told those lines are suspect. `injection-allow` (globs, read from main's caller, so guard-protected) exempts test fixtures from the aimed rule; controls are never exempt.
-- **The one label:** `cert-review-approved` is the single exception to "no labels" (PM, provisional): it applies only to pull requests that change the certifier, it can't turn a failure into a pass (success needs the guard's approval and a pass verdict), and the approver is an agent. Dropping it is the `approval-label` input plus the guard step, with nothing else depending on it.
-- **Releases** carry no cert line: merged on main means certified; supply-chain provenance stays a code-only check in each repo.
 
 ## Which unit tests a commit runs
 
@@ -332,10 +295,10 @@ Chrome for Testing runs crashpad by default and ignores `--crash-dumps-dir` and 
 
 Google publishes no symbols for Chrome for Testing: no Breakpad files next to the `chrome-linux64.zip` downloads, and the binary is stripped (only `.eh_frame` and a `.gnu_debuglink` to a file that isn't public). Chrome keeps frame pointers, though, so the stack walks cleanly as `module + offset`, and the dump carries crashpad's annotations: `ver`, `ptype` (`renderer`, `gpu-process`, `browser` and so on), the GPU (`gpu-gl-renderer` shows SwiftShader in CI), the page's origin, and V8 crash keys when V8 sets them.
 
-`slicc-minidump <file.dmp>...` downloads a pinned, checksummed [`minidump-stackwalk`](https://github.com/rust-minidump/rust-minidump) 0.27.0 into `~/.cache/slicc-minidump/` (Linux x64 and macOS) and prints, per dump, the signal and address, the faulting module and offset, the annotations without the command-line switches, the crashing thread's first 40 frames and the module list with build ids. The reusable workflow runs it on every `artifacts/**/*.dmp`, writes the full report next to the dump as `<id>.txt` and puts everything above the module list into the job summary. To read a dump from a CI run locally:
+`slicc-minidump <file.dmp>...` downloads a pinned, checksummed [`minidump-stackwalk`](https://github.com/rust-minidump/rust-minidump) 0.27.0 into `~/.cache/slicc-minidump/` (Linux x64 and macOS) and prints, per dump, the signal and address, the faulting module and offset, the annotations without the command-line switches, the crashing thread's first 40 frames and the module list with build ids. The pipeline uploads each shard's `artifacts/` as `integration-<shard>`, and its reviewers get them. To read a dump from a CI run locally:
 
 ```sh
-gh run download <run-id> -n coverage-profiles-screenshots -D ci
+gh run download <run-id> -n integration-0 -D ci
 npx slicc-minidump ci/artifacts/<suite>/<test>/*.dmp
 ```
 

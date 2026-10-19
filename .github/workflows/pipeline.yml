@@ -1,0 +1,462 @@
+name: Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: '24'
+      runs-on:
+        type: string
+        default: ubuntu-latest
+      timeout-minutes:
+        type: number
+        default: 20
+      lint:
+        type: string
+        default: npm run lint
+      chrome:
+        type: string
+        default: ''
+      test:
+        type: string
+        default: npm test
+      test-glob:
+        type: string
+        default: test/integration/**/*.test.mjs
+      shards:
+        type: number
+        default: 4
+      deploy:
+        type: string
+        default: ''
+      review-browser:
+        type: string
+        default: npm run --if-present review:browser
+      review-prompt:
+        type: string
+        default: ''
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+      SLICC_ISSUES_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  LEFTHOOK: '0'
+  FINDINGS_SCHEMA: >-
+    {"type":"object","additionalProperties":false,"required":["verdict","summary","comments","issues"],"properties":{"verdict":{"type":"string","enum":["approved","denied"]},"summary":{"type":"string"},"comments":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"type":"string"},"line":{"type":"integer"},"body":{"type":"string"}}}},"issues":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["repo","title","body"],"properties":{"repo":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}}}}}}
+
+jobs:
+  lint:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      shards: ${{ steps.shards.outputs.shards }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        env:
+          LINT: ${{ inputs.lint }}
+        run: bash -c "$LINT"
+
+      - id: shards
+        env:
+          SHARDS: ${{ inputs.shards }}
+        run: echo "shards=$(node -p "JSON.stringify([...Array(Math.max(1, $SHARDS)).keys()])")" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: lint
+    if: inputs.deploy != '' && github.event_name != 'push'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.url }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Secrets as environment variables
+        env:
+          SECRETS: ${{ toJSON(secrets) }}
+        run: |
+          node --input-type=module >> "$GITHUB_ENV" <<'EOF'
+          for (const [key, value] of Object.entries(JSON.parse(process.env.SECRETS))) {
+            if (key !== 'github_token') process.stdout.write(`${key}<<SLICC_EOF\n${value}\nSLICC_EOF\n`);
+          }
+          EOF
+
+      - id: deploy
+        name: Deploy to staging
+        env:
+          DEPLOY: ${{ inputs.deploy }}
+        run: bash -c "$DEPLOY"
+
+  test:
+    needs: [lint, deploy]
+    if: github.event_name != 'push' && !cancelled() && needs.lint.result == 'success' && needs.deploy.result != 'failure'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.lint.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Chrome
+        env:
+          CHROME: ${{ inputs.chrome }}
+        run: npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser --with-deps ${CHROME:+--version "$CHROME"}
+
+      - uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
+        continue-on-error: true
+        with:
+          name: ^junit-
+          name_is_regexp: true
+          search_artifacts: true
+          workflow_conclusion: completed
+          if_no_artifact_found: ignore
+          path: ${{ runner.temp }}/junit-download
+
+      - name: Timings
+        run: |
+          mkdir -p "$RUNNER_TEMP/timings"
+          find "$RUNNER_TEMP/junit-download" -name '*.xml' -exec cp {} "$RUNNER_TEMP/timings/" \; 2>/dev/null || true
+
+      - id: split
+        uses: r7kamura/split-tests-by-timings@5134247c551d8fe78ee44182a8228256e2ecd43e
+        with:
+          reports: ${{ runner.temp }}/timings
+          glob: ${{ inputs.test-glob }}
+          index: ${{ matrix.shard }}
+          total: ${{ inputs.shards }}
+
+      - name: Integration tests
+        env:
+          TEST: ${{ inputs.test }}
+          FILES: ${{ steps.split.outputs.paths }}
+          SHARD: ${{ matrix.shard }}
+          STAGING_URL: ${{ needs.deploy.outputs.url }}
+        run: |
+          shard=node_modules/@ai-ecoverse/slicc-shared-web/harness/shard.cjs
+          [ -f "$shard" ] || shard=harness/shard.cjs
+          mkdir -p junit
+          SLICC_TEST_FILES=$(tr ' ' '\n' <<< "$FILES")
+          SLICC_TEST_NODE_OPTIONS=${NODE_OPTIONS:-}
+          NODE_OPTIONS="${NODE_OPTIONS:-} --require $PWD/$shard --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=$PWD/junit/$SHARD.xml"
+          export SLICC_TEST_FILES SLICC_TEST_NODE_OPTIONS NODE_OPTIONS
+          bash -c "$TEST"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: junit-${{ matrix.shard }}
+          path: junit/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: integration-${{ matrix.shard }}
+          path: |
+            coverage/
+            artifacts/
+            junit/
+          if-no-files-found: ignore
+
+  integration:
+    needs: test
+    if: github.event_name != 'push' && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULT: ${{ needs.test.result }}
+        run: test "$RESULT" = success
+
+  context:
+    needs: lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p context
+          gh pr view "$PR" --json number,title,body,author,labels,comments,reviews,commits,files > context/pr.json
+          gh pr diff "$PR" > context/pr.diff
+          gh api --paginate "repos/$GH_REPO/pulls/$PR/comments" > context/review-comments.json
+          gh issue list --state all --limit 500 --json number,title,state,body,labels,createdAt,closedAt > context/issues.json
+          gh pr list --state all --limit 200 --json number,title,state,body,mergedAt > context/pulls.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: context
+          path: context/
+
+  review:
+    needs: [test, deploy, context]
+    if: github.event_name == 'pull_request' && !cancelled() && needs.test.result != 'skipped' && needs.context.result == 'success' && needs.deploy.result != 'failure'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [claude, codex]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: head
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - run: |
+          (cd head && npm ci)
+          (cd base && npm ci)
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: integration-*
+          path: review/integration
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: context
+          path: review/context
+
+      - name: Four browsers
+        working-directory: head
+        env:
+          CHROME: ${{ inputs.chrome }}
+          REVIEW_BROWSER: ${{ inputs.review-browser }}
+          STAGING_URL: ${{ needs.deploy.outputs.url }}
+        run: |
+          npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser --with-deps ${CHROME:+--version "$CHROME"}
+          browser=$(npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp find-browser ${CHROME:+--version "$CHROME"} | tail -1)
+          port=9301
+          list=
+          for side in head base; do
+            for link in extension cli; do
+              profile="$RUNNER_TEMP/browser-$side-$link"
+              mkdir -p "$profile"
+              nohup "$browser" --headless=new --no-sandbox --no-first-run --no-default-browser-check \
+                --enable-unsafe-extension-debugging --remote-debugging-port="$port" \
+                --user-data-dir="$profile" about:blank > "$profile.log" 2>&1 &
+              for _ in $(seq 50); do curl -fs "http://127.0.0.1:$port/json/version" > /dev/null && break; sleep 0.2; done
+              (cd "$GITHUB_WORKSPACE/$side" && SLICC_REVIEW_SIDE=$side SLICC_REVIEW_LINK=$link \
+                SLICC_REVIEW_CDP="http://127.0.0.1:$port" bash -c "$REVIEW_BROWSER")
+              list="$list{\"side\":\"$side\",\"link\":\"$link\",\"cdp\":\"http://127.0.0.1:$port\",\"tree\":\"$side\"},"
+              port=$((port + 1))
+            done
+          done
+          echo "[${list%,}]" > "$GITHUB_WORKSPACE/review/browsers.json"
+          cat "$GITHUB_WORKSPACE/review/browsers.json"
+
+      - name: Prompt
+        env:
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          STAGING_URL: ${{ needs.deploy.outputs.url }}
+          EXTRA: ${{ inputs.review-prompt }}
+        run: |
+          cat > review/prompt.txt <<EOF
+          Review pull request $PR of $REPO.
+
+          The working directory holds:
+          - head/: the pull request's head, dependencies installed.
+          - base/: its base, dependencies installed.
+          - review/context/: the pull request (pr.json, pr.diff, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json).
+          - review/integration/: the integration tests' coverage, artifacts (screenshots, CPU profiles, crash dumps, console logs) and JUnit reports, one directory per shard.
+          - review/browsers.json: four running Chrome instances, reachable over CDP: head and base, each linked through the extension and through slicc-cli. Use them to compare the head's behaviour with the base's.
+          ${STAGING_URL:+- The service is deployed to staging at $STAGING_URL.}
+
+          Read the change, run what you need, and decide whether it should be merged.
+          Answer with JSON that matches the schema you were given:
+          - verdict: "approved" or "denied".
+          - summary: a few sentences on the change and your verdict.
+          - comments: findings on lines the pull request adds or changes, with path relative to the repository root and the line number in head/.
+          - issues: problems worth tracking outside this pull request, each with repo as owner/name, a title and a body.
+
+          $EXTRA
+          EOF
+
+      - id: claude
+        if: matrix.agent == 'claude'
+        uses: anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6
+        with:
+          prompt: Follow the instructions in review/prompt.txt.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          allowed_bots: renovate[bot]
+          claude_args: >-
+            --allowedTools Bash,Read,Glob,Grep,WebFetch
+            --json-schema '${{ env.FINDINGS_SCHEMA }}'
+
+      - if: matrix.agent == 'claude'
+        env:
+          FINDINGS: ${{ steps.claude.outputs.structured_output }}
+        run: printf '%s' "$FINDINGS" > review/findings.json
+
+      - if: matrix.agent == 'codex'
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675
+        with:
+          prompt-file: review/prompt.txt
+          output-file: review/findings.json
+          output-schema: ${{ env.FINDINGS_SCHEMA }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: danger-full-access
+          allow-bot-users: renovate
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: findings-${{ matrix.agent }}
+          path: review/findings.json
+          if-no-files-found: ignore
+
+  post:
+    needs: review
+    if: github.event_name == 'pull_request' && !cancelled() && needs.review.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: findings-*
+          path: findings
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUES_TOKEN: ${{ secrets.SLICC_ISSUES_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { readFile } from 'node:fs/promises';
+          const { GITHUB_API_URL: api, GITHUB_REPOSITORY: repo, GH_TOKEN, ISSUES_TOKEN, PR, SHA, RUN_URL } = process.env;
+          const post = async (path, body, token = GH_TOKEN) => {
+            const res = await fetch(`${api}/${path}`, {
+              method: 'POST',
+              headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`);
+            return res.json();
+          };
+          let failed = false;
+          for (const agent of ['claude', 'codex']) {
+            const findings = await readFile(`findings/findings-${agent}/findings.json`, 'utf8').then(JSON.parse).catch(() => undefined);
+            const state = !findings ? 'error' : findings.verdict === 'approved' ? 'success' : 'failure';
+            await post(`repos/${repo}/statuses/${SHA}`, {
+              state,
+              context: `review / ${agent}`,
+              description: (findings?.summary ?? 'no findings').slice(0, 140),
+              target_url: RUN_URL,
+            });
+            if (!findings) continue;
+            await post(`repos/${repo}/issues/${PR}/comments`, { body: `**${agent}: ${findings.verdict}**\n\n${findings.summary}` });
+            for (const { path, line, body } of findings.comments) {
+              await post(`repos/${repo}/pulls/${PR}/comments`, { commit_id: SHA, path, line, side: 'RIGHT', body: `**${agent}:** ${body}` })
+                .catch(() => post(`repos/${repo}/issues/${PR}/comments`, { body: `**${agent}** on \`${path}:${line}\`: ${body}` }));
+            }
+            for (const issue of findings.issues) {
+              const target = issue.repo || repo;
+              await post(`repos/${target}/issues`, { title: issue.title, body: `${issue.body}\n\nFrom ${agent}'s review of ${repo}#${PR}.` }, target === repo ? GH_TOKEN : ISSUES_TOKEN || GH_TOKEN)
+                .then((created) => console.log(created.html_url))
+                .catch((error) => { console.error(error.message); failed = true; });
+            }
+          }
+          process.exit(failed ? 1 : 0);
+          EOF
+
+  release:
+    needs: lint
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: release-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
