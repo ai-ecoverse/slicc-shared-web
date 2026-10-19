@@ -64,7 +64,6 @@ export function commandLine(
     ? [
         '--enable-unsafe-extension-debugging',
         ...(preloaded.length > 0 ? [`--load-extension=${preloaded.join(',')}`] : []),
-        `--disable-extensions-except=${all.join(',')}`,
       ]
     : [];
   return [...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
