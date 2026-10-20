@@ -198,8 +198,7 @@ extends:
 pre-commit:
   jobs:
     - name: shared hooks
-      run: |
-        test -f node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml || { echo 'slicc-shared-web is not installed in this worktree, so its hooks cannot run: run npm install'; exit 1; }
+      run: test -f node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml || { echo 'slicc-shared-web hooks missing, run npm install'; exit 1; }
 ```
 
 - **No lefthook anywhere:** with `assert_lefthook_installed` (the shared config sets it too) the git hook exits 1 with lefthook's "Can't find lefthook in PATH … Operation is aborted", where it used to print the first line and exit 0.

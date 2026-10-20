@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  accessSync,
-  constants,
   cpSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -14,7 +13,7 @@ import {
 } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -31,20 +30,17 @@ const snippet = readFileSync(join(repo, 'README.md'), 'utf8').match(
 const which = (command) =>
   spawnSync('sh', ['-c', `command -v ${command}`], { encoding: 'utf8' }).stdout.trim();
 
-const executable = (file) => {
-  try {
-    accessSync(file, constants.X_OK);
-    return true;
-  } catch {
-    return false;
+const path = mkdtempSync(join(tmpdir(), 'slicc-lefthook-bin-'));
+dirs.push(path);
+const linked = new Set();
+for (const dir of new Set([process.execPath, which('git'), which('sh')].map(dirname))) {
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith('lefthook') && !linked.has(name)) {
+      linked.add(name);
+      symlinkSync(join(dir, name), join(path, name));
+    }
   }
-};
-
-const path = [
-  ...new Set([process.execPath, which('git'), which('sh')].map((file) => dirname(file))),
-]
-  .filter((dir) => !executable(join(dir, 'lefthook')))
-  .join(delimiter);
+}
 
 function env(extra = {}) {
   const clean = { ...process.env, PATH: path, ...extra };
@@ -110,14 +106,10 @@ const shared = 'biome,typecheck,no comments,no unit tests in git,AGENTS.md,diff 
 
 test('a worktree without node_modules fails the commit, with run npm install while lefthook is reachable and lefthook abort once it is not', async () => {
   const { main, worktree } = await fixture();
-  assert.ok(path.length > 0);
 
   const missing = commit(worktree, 'no node_modules here');
   assert.notEqual(missing.status, 0, missing.output);
-  assert.match(
-    missing.output,
-    /slicc-shared-web is not installed in this worktree, so its hooks cannot run: run npm install/
-  );
+  assert.match(missing.output, /slicc-shared-web hooks missing, run npm install/);
   assert.equal(ok(worktree, 'log', '-1', '--format=%s').trim(), 'init');
 
   symlinkSync(join(main, 'node_modules'), join(worktree, 'node_modules'));
