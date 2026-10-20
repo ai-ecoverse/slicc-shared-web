@@ -23,7 +23,6 @@ import { serve } from './server.mjs';
 import { artifacts, bounded, ignore, sleep, slug, TIMED_OUT } from './util.mjs';
 
 export const flags = [
-  '--headless=new',
   '--remote-debugging-port=0',
   '--remote-debugging-pipe',
   '--no-first-run',
@@ -40,7 +39,6 @@ export const flags = [
 ];
 
 export const unrealistic = [
-  '--headless=new',
   '--disable-background-timer-throttling',
   '--disable-backgrounding-occluded-windows',
   '--disable-renderer-backgrounding',
