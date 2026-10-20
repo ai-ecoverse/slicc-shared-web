@@ -204,6 +204,11 @@ jobs:
           SLICC_TEST_JUNIT=$PWD/junit/$SHARD.xml
           SLICC_TEST_NODE_OPTIONS=${NODE_OPTIONS:-}
           NODE_OPTIONS="${NODE_OPTIONS:-} --require $PWD/$shard --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=$PWD/junit/$SHARD.xml"
+          if [ -z "${DISPLAY:-}" ]; then
+            nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+            for _ in $(seq 50); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.2; done
+            export DISPLAY=:99
+            fi
           export SLICC_TEST_FILES SLICC_TEST_ALL SLICC_TEST_SHARD SLICC_TEST_JUNIT SLICC_TEST_NODE_OPTIONS NODE_OPTIONS
           bash -c "$TEST"
 
