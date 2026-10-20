@@ -42,6 +42,8 @@ function shardEnv(dir, files) {
   return {
     ...env,
     SLICC_TEST_FILES: files.join('\n'),
+    SLICC_TEST_ALL: 'a.test.mjs\nb.test.mjs\nc.test.mjs',
+    SLICC_TEST_SHARD: '0',
     SLICC_TEST_NODE_OPTIONS: '',
     NODE_OPTIONS: `--require ${shardPath} --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=${join(dir, 'junit.xml')}`,
   };
@@ -81,40 +83,82 @@ test('runs nothing when the shard is empty', async () => {
   assert.doesNotMatch(await readFile(join(dir, 'junit.xml'), 'utf8'), /name="(a|b|nested)"/);
 });
 
-test('runs a call outside test-glob in full on shard 0 only, and keeps every call report', async () => {
+async function split(command, { all, shards, fail = false }) {
   const dir = await mkdtemp(join(tmpdir(), 'slicc-shard-'));
   dirs.push(dir);
-  const plain = (name) => `import { test } from 'node:test';\ntest('${name}', () => {});\n`;
+  const body = (name) =>
+    `import { test } from 'node:test';\ntest('${name}', () => {${fail && name === 'a' ? " throw new Error('a'); " : ''}});\n`;
   await mkdir(join(dir, 'u'));
   await mkdir(join(dir, 'i'));
-  await writeFile(join(dir, 'u', 'a.test.mjs'), plain('a'));
-  await writeFile(join(dir, 'i', 'b.test.mjs'), plain('b'));
-  await writeFile(join(dir, 'i', 'c.test.mjs'), plain('c'));
+  await writeFile(join(dir, 'u', 'a.test.mjs'), body('a'));
+  await writeFile(join(dir, 'i', 'b.test.mjs'), body('b'));
+  await writeFile(join(dir, 'i', 'c.test.mjs'), body('c'));
   const ran = {};
-  for (const [shard, file] of [
-    ['0', 'i/b.test.mjs'],
-    ['1', 'i/c.test.mjs'],
-  ]) {
+  for (const [shard, files] of Object.entries(shards)) {
     const junitDir = join(dir, `junit-${shard}`);
     await mkdir(junitDir);
     const junit = join(junitDir, `${shard}.xml`);
     const env = {
-      ...shardEnv(dir, [file]),
-      SLICC_TEST_ALL: 'i/b.test.mjs\ni/c.test.mjs',
+      ...shardEnv(dir, files),
+      SLICC_TEST_ALL: all.join('\n'),
       SLICC_TEST_SHARD: shard,
       SLICC_TEST_JUNIT: junit,
       NODE_OPTIONS: `--require ${shardPath} --test-reporter=junit --test-reporter-destination=${junit}`,
     };
-    await run('bash', ['-c', 'node --test "u/*.test.mjs" && node --test "i/*.test.mjs"'], {
-      cwd: dir,
-      env,
-    });
+    const code = await run('bash', ['-c', command], { cwd: dir, env }).then(
+      () => 0,
+      (error) => error.code
+    );
     const reports = await readdir(junitDir);
-    assert.equal(reports.length, 2, reports.join());
     const xml = (
       await Promise.all(reports.map((name) => readFile(join(junitDir, name), 'utf8')))
     ).join();
-    ran[shard] = ['a', 'b', 'c'].filter((name) => xml.includes(`name="${name}"`));
+    ran[shard] = {
+      code,
+      reports: reports.length,
+      names: ['a', 'b', 'c'].filter((n) => xml.includes(`name="${n}"`)),
+    };
   }
-  assert.deepEqual(ran, { 0: ['a', 'b'], 1: ['c'] });
+  return ran;
+}
+
+const integration = ['i/b.test.mjs', 'i/c.test.mjs'];
+const halves = { 0: ['i/b.test.mjs'], 1: ['i/c.test.mjs'] };
+
+test('runs a call outside test-glob in full on shard 0 only, and keeps every call report', async () => {
+  const ran = await split('node --test "u/*.test.mjs" && node --test "i/*.test.mjs"', {
+    all: integration,
+    shards: halves,
+  });
+  assert.deepEqual(ran, {
+    0: { code: 0, reports: 2, names: ['a', 'b'] },
+    1: { code: 0, reports: 2, names: ['c'] },
+  });
+});
+
+test('keeps the files outside test-glob of a mixed call on shard 0', async () => {
+  const ran = await split('node --test "u/*.test.mjs" "i/*.test.mjs"', {
+    all: integration,
+    shards: halves,
+  });
+  assert.deepEqual(ran[0].names, ['a', 'b']);
+  assert.deepEqual(ran[1].names, ['c']);
+});
+
+test('keeps the files outside test-glob of a bare node --test on shard 0', async () => {
+  const ran = await split('node --test', { all: integration, shards: halves });
+  assert.deepEqual(ran[0].names, ['a', 'b']);
+  assert.deepEqual(ran[1].names, ['c']);
+});
+
+test('runs the command unchanged on shard 0 when test-glob matches nothing', async () => {
+  const ran = await split('node --test "u/*.test.mjs" "i/*.test.mjs"', {
+    all: [],
+    shards: { 0: [], 1: [] },
+    fail: true,
+  });
+  assert.notEqual(ran[0].code, 0);
+  assert.deepEqual(ran[0].names, ['a', 'b', 'c']);
+  assert.equal(ran[1].code, 0);
+  assert.deepEqual(ran[1].names, []);
 });

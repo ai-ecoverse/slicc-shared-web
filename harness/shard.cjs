@@ -1,9 +1,18 @@
 'use strict';
-const { existsSync, renameSync } = require('node:fs');
+const { existsSync, globSync, renameSync, statSync } = require('node:fs');
 const { isAbsolute, join, matchesGlob, normalize, relative } = require('node:path');
 
 const env = process.env;
 const list = env.SLICC_TEST_FILES;
+const exts = '{js,mjs,cjs,ts,mts,cts}';
+const defaults = [
+  `**/*.test.${exts}`,
+  `**/*-test.${exts}`,
+  `**/*_test.${exts}`,
+  `**/test-*.${exts}`,
+  `**/test.${exts}`,
+  `**/test/**/*.${exts}`,
+];
 
 const lines = (value) =>
   (value ?? '')
@@ -11,11 +20,34 @@ const lines = (value) =>
     .filter(Boolean)
     .map((file) => normalize(file));
 
+const local = (pattern) =>
+  normalize(isAbsolute(pattern) ? relative(process.cwd(), pattern) : pattern);
+
 const inside = (file, pattern) => {
-  const path = normalize(isAbsolute(pattern) ? relative(process.cwd(), pattern) : pattern);
+  const path = local(pattern);
   const dir = path.replace(/\/+$/, '');
   return file === path || file.startsWith(`${dir}/`) || matchesGlob(file, path);
 };
+
+const directory = (path) => {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+function expand(patterns) {
+  const globs =
+    patterns.length === 0
+      ? defaults
+      : patterns.flatMap((pattern) => {
+          const path = local(pattern).replace(/\/+$/, '');
+          return directory(path) ? defaults.map((glob) => `${path}/${glob}`) : [path];
+        });
+  const files = globSync(globs, { exclude: (file) => file.includes('node_modules') });
+  return files.map((file) => normalize(file)).filter((file) => !directory(file));
+}
 
 function keepReport() {
   const junit = env.SLICC_TEST_JUNIT;
@@ -26,11 +58,12 @@ function keepReport() {
 
 function select(patterns) {
   const matches = (file) => patterns.length === 0 || patterns.some((p) => inside(file, p));
-  const all = lines(env.SLICC_TEST_ALL);
-  if (all.length > 0 && !all.some(matches)) {
-    return (env.SLICC_TEST_SHARD ?? '0') === '0' ? undefined : [];
-  }
-  return lines(list).filter(matches);
+  const mine = lines(list).filter(matches);
+  if ((env.SLICC_TEST_SHARD ?? '0') !== '0') return mine;
+  const all = new Set(lines(env.SLICC_TEST_ALL));
+  if (all.size === 0) return undefined;
+  const rest = expand(patterns).filter((file) => !all.has(file));
+  return [...new Set([...mine, ...rest])];
 }
 
 if (list !== undefined && process.execArgv.includes('--test') && !env.NODE_TEST_CONTEXT) {

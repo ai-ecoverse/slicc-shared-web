@@ -85,14 +85,15 @@ jobs:
           EVENT: ${{ github.event_name }}
           BRANCH: ${{ github.head_ref }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
+          SENDER: ${{ github.event.sender.login }}
           RENOVATE_GROUPS: ${{ inputs.review-renovate }}
         run: |
           node --input-type=module <<'EOF' | tee -a "$GITHUB_OUTPUT"
           import { matchesGlob } from 'node:path';
-          const { EVENT, BRANCH, AUTHOR, RENOVATE_GROUPS } = process.env;
+          const { EVENT, BRANCH, AUTHOR, SENDER, RENOVATE_GROUPS } = process.env;
           const slug = BRANCH.replace(/^renovate\//, '').replace(/^major-/, '');
           const groups = RENOVATE_GROUPS.split('\n').map((group) => group.trim()).filter(Boolean);
-          const renovate = AUTHOR === 'renovate[bot]' && BRANCH.startsWith('renovate/');
+          const renovate = AUTHOR === 'renovate[bot]' && SENDER === 'renovate[bot]' && BRANCH.startsWith('renovate/');
           const review = EVENT === 'pull_request' && (!renovate || groups.some((group) => matchesGlob(slug, group)));
           console.log(`review=${review}`);
           EOF
@@ -159,7 +160,8 @@ jobs:
         env:
           CHROME: ${{ inputs.chrome }}
         run: |
-          DEPS=$( { [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; } && echo 1 || true)
+          DEPS=
+          if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then DEPS=1; fi
           npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser ${DEPS:+--with-deps} ${CHROME:+--version "$CHROME"}
 
       - uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
@@ -306,7 +308,8 @@ jobs:
           REVIEW_BROWSER: ${{ inputs.review-browser }}
           STAGING_URL: ${{ needs.deploy.outputs.url }}
         run: |
-          DEPS=$( { [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; } && echo 1 || true)
+          DEPS=
+          if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then DEPS=1; fi
           npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser ${DEPS:+--with-deps} ${CHROME:+--version "$CHROME"}
           browser=$(npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp find-browser ${CHROME:+--version "$CHROME"} | tail -1)
           port=9301
@@ -438,14 +441,29 @@ jobs:
           node --input-type=module <<'EOF'
           import { readFile } from 'node:fs/promises';
           const { GITHUB_API_URL: api, GITHUB_REPOSITORY: repo, GH_TOKEN, ISSUES_TOKEN, PR, SHA, RUN_URL } = process.env;
-          const post = async (path, body, token = GH_TOKEN) => {
+          const call = async (method, path, body, token = GH_TOKEN) => {
             const res = await fetch(`${api}/${path}`, {
-              method: 'POST',
+              method,
               headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json' },
-              body: JSON.stringify(body),
+              body: body === undefined ? undefined : JSON.stringify(body),
             });
-            if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`);
+            if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`);
             return res.json();
+          };
+          const post = (path, body, token) => call('POST', path, body, token);
+          const pages = async (path, token) => {
+            const items = [];
+            for (let page = 1; ; page += 1) {
+              const batch = await call('GET', `${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`, undefined, token);
+              items.push(...batch);
+              if (batch.length < 100) return items;
+            }
+          };
+          const said = await pages(`repos/${repo}/issues/${PR}/comments`);
+          const inline = await pages(`repos/${repo}/pulls/${PR}/comments`);
+          const once = async (body, send) => {
+            if (said.some((comment) => comment.body === body) || inline.some((comment) => comment.body === body)) return;
+            await send();
           };
           let failed = false;
           for (const agent of ['claude', 'codex']) {
@@ -458,10 +476,16 @@ jobs:
               target_url: RUN_URL,
             });
             if (!findings) continue;
-            await post(`repos/${repo}/issues/${PR}/comments`, { body: `**${agent}: ${findings.verdict}**\n\n${findings.summary}` });
+            const marker = `<!-- slicc-review:${agent} -->`;
+            const summary = `${marker}\n**${agent}: ${findings.verdict}** on ${SHA.slice(0, 7)}\n\n${findings.summary}`;
+            const sticky = said.find((comment) => comment.body.startsWith(marker));
+            await (sticky ? call('PATCH', `repos/${repo}/issues/comments/${sticky.id}`, { body: summary }) : post(`repos/${repo}/issues/${PR}/comments`, { body: summary }));
             for (const { path, line, body } of findings.comments) {
-              await post(`repos/${repo}/pulls/${PR}/comments`, { commit_id: SHA, path, line, side: 'RIGHT', body: `**${agent}:** ${body}` })
-                .catch(() => post(`repos/${repo}/issues/${PR}/comments`, { body: `**${agent}** on \`${path}:${line}\`: ${body}` }));
+              const text = `**${agent}:** ${body}`;
+              const fallback = `**${agent}** on \`${path}:${line}\`: ${body}`;
+              if (inline.some((comment) => comment.path === path && comment.body === text)) continue;
+              await post(`repos/${repo}/pulls/${PR}/comments`, { commit_id: SHA, path, line, side: 'RIGHT', body: text })
+                .catch(() => once(fallback, () => post(`repos/${repo}/issues/${PR}/comments`, { body: fallback })));
             }
             for (const issue of findings.issues) {
               const target = issue.repo || repo;
@@ -470,9 +494,7 @@ jobs:
                 continue;
               }
               const token = target === repo ? GH_TOKEN : ISSUES_TOKEN || GH_TOKEN;
-              const open = await fetch(`${api}/repos/${target}/issues?state=open&per_page=100`, {
-                headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json' },
-              }).then((res) => (res.ok ? res.json() : []));
+              const open = await pages(`repos/${target}/issues?state=open`, token).catch(() => []);
               const same = open.find((existing) => existing.title.trim().toLowerCase() === issue.title.trim().toLowerCase());
               if (same) {
                 console.log(`already open: ${same.html_url}`);
