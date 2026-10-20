@@ -69,7 +69,7 @@ jobs:
 - the pull request's head as the working directory and its base in `$RUNNER_TEMP/base`, each after `npm ci` (claude-code-action needs the working directory to be a checkout, and a base nested inside it would break the head's Biome config);
 - `review/integration/`, every shard's artifact;
 - `review/context/`, from the `context` job: the pull request with its comments, reviews and diff, the repo's issues and recent pull requests;
-- `review/browsers.json`: four headless Chrome instances on one machine, `head` and `base` each linked through the extension and through slicc-cli, on CDP ports 9301 to 9304. For each one the job runs `review-browser` (by default `npm run --if-present review:browser`) in that side's tree with `SLICC_REVIEW_SIDE` (`head` or `base`), `SLICC_REVIEW_LINK` (`extension` or `cli`) and `SLICC_REVIEW_CDP`, so the repo loads its own build into that browser;
+- `review/browsers.json`: four headed Chrome instances on one machine (on Xvfb display `:99` when the runner has no `DISPLAY`, since headless Chrome behaves slightly differently), `head` and `base` each linked through the extension and through slicc-cli, on CDP ports 9301 to 9304. For each one the job runs `review-browser` (by default `npm run --if-present review:browser`) in that side's tree with `SLICC_REVIEW_SIDE` (`head` or `base`), `SLICC_REVIEW_LINK` (`extension` or `cli`) and `SLICC_REVIEW_CDP`, so the repo loads its own build into that browser;
 - `review-prompt`, appended to the shared prompt.
 
 Each reviewer answers with `findings.json`, held to one JSON schema:
