@@ -212,9 +212,9 @@ Without it, every worktree of a repo shares `.git/hooks/` with the main clone, a
 "prepare": "slicc-install-hooks"
 ```
 
-- **What it does:** turns on `extensions.worktreeConfig`, sets this worktree's own `core.hooksPath` (`git config --worktree`) to `worktree-hooks/` in its git directory (`.git/worktree-hooks/` in the main clone, `.git/worktrees/<name>/worktree-hooks/` in a linked worktree), then runs `lefthook install` there. Running it again changes nothing.
-- **Hooks are never shared:** each worktree's hook calls its own `node_modules` lefthook, whatever another worktree installs later, and removing a worktree removes only its own hooks. lefthook's own `postinstall` and later `lefthook install` runs follow the same `core.hooksPath`.
-- **A worktree that never ran it:** it still falls back to the shared `.git/hooks/`, which fails closed as [above](#hooks-that-fail-closed) until `npm install` runs there.
+- **What it does:** moves `core.bare` and `core.worktree` from the shared config into the main worktree's `config.worktree` (so worktrees of a bare repo stay work trees), turns on `extensions.worktreeConfig`, sets this worktree's own `core.hooksPath` (`git config --worktree`) to `worktree-hooks/` in its git directory (`.git/worktree-hooks/` in the main clone, `.git/worktrees/<name>/worktree-hooks/` in a linked worktree), then runs `lefthook install` there. Running it again changes nothing.
+- **Hooks are never shared:** each worktree's hook calls its own `node_modules` lefthook, whatever another worktree installs later, and removing a worktree removes only its own hooks. Once it has run, lefthook's own `postinstall` and later `lefthook install` runs follow the same `core.hooksPath`. The first `npm install` in a new worktree runs that `postinstall` before `prepare`, so it still writes the shared `.git/hooks/` once.
+- **A worktree that never ran it:** it still falls back to the shared `.git/hooks/`, which any new worktree can repoint and which fails closed as [above](#hooks-that-fail-closed), until `npm install` runs there.
 - **Outside a git checkout** (a packed tarball, say) it does nothing and exits 0.
 
 ## Which unit tests a commit runs
