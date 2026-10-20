@@ -70,6 +70,10 @@ function handle(req, res, body) {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   let m;
+  if (state.flaky?.[p] > 0) {
+    state.flaky[p]--;
+    return reply(res, 502, { message: 'bad gateway' });
+  }
   if (p === '/graphql')
     return reply(res, 200, {
       data: {
@@ -81,9 +85,42 @@ function handle(req, res, body) {
   if ((m = /^\/repos\/o\/r\/commits\/([0-9a-f]{40})\/check-runs$/.exec(p)))
     return reply(res, 200, {
       check_runs: state.checks.filter(
-        (c) => c.head_sha === m[1] && c.name === url.searchParams.get('check_name')
+        (c) =>
+          c.kind !== 'status' &&
+          c.head_sha === m[1] &&
+          c.name === url.searchParams.get('check_name')
       ),
     });
+  if ((m = /^\/repos\/o\/r\/commits\/([0-9a-f]{40})\/statuses$/.exec(p)))
+    return reply(
+      res,
+      200,
+      state.checks
+        .filter((c) => c.kind === 'status' && c.head_sha === m[1])
+        .map((c) => ({
+          id: c.id,
+          context: c.context,
+          state: c.state,
+          description: c.description,
+          target_url: c.target_url,
+          creator: c.creator,
+        }))
+        .reverse()
+    );
+  if ((m = /^\/repos\/o\/r\/statuses\/([0-9a-f]{40})$/.exec(p)) && req.method === 'POST') {
+    const c = {
+      kind: 'status',
+      name: body.context,
+      id: state.nextId++,
+      head_sha: m[1],
+      creator: { login: 'github-actions[bot]' },
+      ...body,
+      conclusion: body.state,
+      output: { title: body.description, summary: body.description },
+    };
+    state.checks.push(c);
+    return reply(res, 201, c);
+  }
   if (p === '/repos/o/r/check-runs' && req.method === 'POST') {
     const c = {
       ...body,
@@ -118,27 +155,30 @@ function handle(req, res, body) {
     state.issues.push({ ...body, number: state.nextId++ });
     return reply(res, 201, state.issues.at(-1));
   }
-  if (p === '/repos/o/r/actions/workflows/cert-review.yml/runs')
-    return reply(res, 200, {
-      workflow_runs: state.workflowRuns.filter(
-        (r) =>
-          r.head_sha === url.searchParams.get('head_sha') &&
-          (!url.searchParams.get('event') || r.event === url.searchParams.get('event'))
-      ),
-    });
-  if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs$/.exec(p)))
-    return reply(res, 200, { jobs: state.jobs[m[1]] ?? [] });
-  if (p === '/repos/o/r/actions/workflows/ci.yml/runs') {
+  if (p === '/repos/o/r/actions/runs') {
+    state.polls = (state.polls ?? 0) + 1;
+    if (state.settleAfter && state.polls >= state.settleAfter)
+      for (const r of state.workflowRuns) r.status = 'completed';
     const q = url.searchParams;
+    const wf = (r) => ({
+      workflow_url: `${origin}/repos/o/r/actions/workflows/1`,
+      repository: { full_name: 'o/r' },
+      ...r,
+    });
     return reply(res, 200, {
-      workflow_runs: (state.ciRuns ?? []).filter(
-        (r) =>
-          (!q.get('head_sha') || r.head_sha === q.get('head_sha')) &&
-          (!q.get('event') || r.event === q.get('event')) &&
-          (!q.get('branch') || r.head_branch === q.get('branch'))
-      ),
+      workflow_runs: [...state.workflowRuns, ...(state.ciRuns ?? [])]
+        .map(wf)
+        .filter(
+          (r) =>
+            (!q.get('head_sha') || r.head_sha === q.get('head_sha')) &&
+            (!q.get('event') || r.event === q.get('event')) &&
+            (!q.get('branch') || r.head_branch === q.get('branch')) &&
+            (!q.get('status') || r.status === q.get('status'))
+        ),
     });
   }
+  if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs$/.exec(p)))
+    return reply(res, 200, { jobs: state.jobs[m[1]] ?? [] });
   if ((m = /^\/repos\/o\/r\/actions\/artifacts\/(\d+)\/zip$/.exec(p))) {
     const zip = state.zips?.[m[1]];
     if (!zip) return reply(res, 404, { message: 'Not Found' });
@@ -153,7 +193,14 @@ function handle(req, res, body) {
       })),
     });
   if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)$/.exec(p)))
-    return reply(res, 200, state.runs[m[1]]);
+    return reply(
+      res,
+      200,
+      state.runs[m[1]] && {
+        workflow_url: `${origin}/repos/o/r/actions/workflows/1`,
+        ...state.runs[m[1]],
+      }
+    );
   return reply(res, 404, { message: `no route ${req.method} ${p}` });
 }
 
@@ -275,6 +322,9 @@ const receipt = (head, status = 'PASS', touched = []) =>
   JSON.stringify({ status, members: [{ pr: 7, head, status, touched, approved: false }] });
 
 function reset() {
+  state.polls = 0;
+  state.settleAfter = 0;
+  state.flaky = {};
   state.checks = [];
   state.reviews = [];
   state.artifacts = [];
@@ -597,6 +647,7 @@ async function groupOf(runs, jobs, groupBase = shas.base) {
     GITHUB_EVENT_PATH: file,
     GUARD: 'PASS',
     CERT_GROUP_WAIT_MS: '1',
+    CERT_GROUP_DEADLINE_MS: '300',
     RECEIPT: JSON.stringify({
       status: 'PASS',
       head: groupHead,
@@ -842,8 +893,8 @@ test('the reusable workflow: only post and the merge group can write checks, the
       plan: [],
       evidence: [],
       review: [],
-      post: ['checks', 'issues', 'pull-requests'],
-      group: ['checks', 'issues'],
+      post: ['issues', 'pull-requests', 'statuses'],
+      group: ['issues', 'statuses'],
     }[name];
     assert.deepEqual(writes, want, name);
   }
@@ -904,6 +955,7 @@ test('bootstrap accepts a pull_request run only for a head whose caller is the v
     GITHUB_EVENT_PATH: file,
     GUARD: 'PASS',
     CERT_GROUP_WAIT_MS: '1',
+    CERT_GROUP_DEADLINE_MS: '300',
     RECEIPT: JSON.stringify({
       status: 'PASS',
       head: shas.docs,
@@ -1052,6 +1104,7 @@ test('the merge group fails closed on a second cert-review writer on its head', 
     GITHUB_EVENT_PATH: file,
     GUARD: 'PASS',
     CERT_GROUP_WAIT_MS: '1',
+    CERT_GROUP_DEADLINE_MS: '300',
     RECEIPT: JSON.stringify({
       status: 'PASS',
       head: shas.docs,
@@ -1421,7 +1474,7 @@ test('post: a wanted evidence that did not arrive is incomplete, never a review'
   const check = state.checks.at(-1);
   assert.equal(check.conclusion, 'failure');
   assert.equal(check.output.title, 'incomplete: evidence; re-run');
-  assert.match(check.output.summary, /no ci\.yml pull_request run on the head/);
+  assert.match(r.stdout, /no ci\.yml pull_request run on the head/);
   assert.equal(state.reviews.length, 0);
 });
 
@@ -1657,4 +1710,367 @@ test('an artifact from an earlier attempt of the run is never evidence for its l
   const r = await evidence(mkdtempSync(join(scratch, 'ev-')));
   assert.equal(r.code, 1, r.stdout);
   assert.match(r.stdout, /run 900 on the head has none of the artifacts/);
+});
+
+test('an org-required run counts by path and workflow_url: a blank name, a ref-pinned path and a required_workflows url pass; another repository’s url never does', async () => {
+  const required = `${origin}/repos/o/r/actions/required_workflows/9`;
+  const ok = await group(
+    'success',
+    '.github/workflows/cert-review.yml@refs/heads/main',
+    'pull_request_target',
+    { name: '', workflow_url: required }
+  );
+  assert.equal(ok.check.conclusion, 'success', ok.r.stdout);
+  const plain = await group('success', '.github/workflows/cert-review.yml', 'pull_request_target', {
+    name: '',
+    workflow_url: required,
+  });
+  assert.equal(plain.check.conclusion, 'success', plain.r.stdout);
+  for (const [why, extra] of [
+    [
+      'another repository’s workflow url',
+      { workflow_url: `${origin}/repos/evil/r/actions/workflows/1` },
+    ],
+    ['no workflow url', { workflow_url: '' }],
+    ['another ref of the path', { path: '.github/workflows/cert-review.yml@refs/heads/pr' }],
+  ]) {
+    const bad = await group(
+      'success',
+      extra.path ?? '.github/workflows/cert-review.yml',
+      'pull_request_target',
+      extra
+    );
+    assert.equal(bad.check.conclusion, 'failure', why);
+  }
+});
+
+test('post: an earlier check run of the org-required run is not a second writer', async () => {
+  const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), () => {
+    writer(
+      559,
+      '.github/workflows/cert-review.yml@refs/heads/main',
+      'pull_request_target',
+      'failure'
+    );
+    state.runs['559'].workflow_url = `${origin}/repos/o/r/actions/required_workflows/9`;
+    state.checks.push(
+      spoofCheck({ external_id: `v2:7:${shas.code}:559:1`, conclusion: 'failure' })
+    );
+  });
+  assert.equal(r.code, 0, r.stdout);
+  assert.equal(check.conclusion, 'success');
+  assert.equal(state.issues.length, 0);
+});
+
+test('every run lookup lists actions/runs and filters by path, never the per-workflow endpoint that omits org-required runs', () => {
+  for (const f of ['group.mjs', 'evidence.mjs', 'lib.mjs', 'post.mjs'])
+    assert.doesNotMatch(
+      readFileSync(join(cert, f), 'utf8'),
+      /actions\/workflows\/[^`'"]*\/runs/,
+      f
+    );
+});
+
+test('evidence takes only the plain workflow path: an org-required run of a same-named workflow is never evidence', async () => {
+  evidenceState({
+    headRuns: [
+      ciRun({
+        id: 905,
+        event: 'pull_request',
+        head_sha: shas.code,
+        pull_requests: [{ number: 7 }],
+        path: '.github/workflows/ci.yml@refs/heads/main',
+        workflow_url: `${origin}/repos/o/r/actions/required_workflows/3`,
+      }),
+    ],
+  });
+  const r = await evidence(mkdtempSync(join(scratch, 'ev-')));
+  assert.equal(r.code, 1, r.stdout);
+  assert.match(r.stdout, /no ci\.yml pull_request run on the head/);
+});
+
+test('the base side pages through push runs, and an exhausted page cap is INCOMPLETE, never a silent none', async () => {
+  const filler = Array.from({ length: 100 }, (_, i) => ({
+    id: 2000 + i,
+    path: '.github/workflows/other.yml',
+    event: 'push',
+    head_sha: shas.base,
+    head_branch: 'main',
+    status: 'completed',
+    conclusion: 'success',
+    head_repository: { full_name: 'o/r' },
+  }));
+  evidenceState({ baseRuns: filler });
+  const r = await evidence(mkdtempSync(join(scratch, 'ev-')));
+  assert.equal(r.code, 1, r.stdout);
+  assert.match(r.stdout, /within the newest 1000 push runs/);
+});
+
+const statusOf = (extra) => ({
+  kind: 'status',
+  name: 'cert-review',
+  context: 'cert-review',
+  id: 700 + state.nextId++,
+  head_sha: shas.code,
+  state: 'success',
+  description: 'pass',
+  creator: { login: 'github-actions[bot]' },
+  ...extra,
+});
+const attemptUrl = (run, attempt = 1) =>
+  `https://github.example/o/r/actions/runs/${run}/attempts/${attempt}`;
+
+test('post sets a cert-review commit status (description = title, target_url = this run attempt), never a check run', async () => {
+  const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }));
+  assert.equal(r.code, 0, r.stdout);
+  assert.equal(check.kind, 'status');
+  assert.deepEqual(
+    [check.context, check.state, check.description, check.target_url],
+    ['cert-review', 'success', 'pass', attemptUrl(4242)]
+  );
+  assert.equal(state.checks.filter((c) => c.kind !== 'status').length, 0);
+});
+
+for (const [name, setup] of [
+  [
+    'a status from another creator',
+    () =>
+      state.checks.push(statusOf({ creator: { login: 'someone' }, target_url: attemptUrl(560) })),
+  ],
+  [
+    'a status whose target_url is no run attempt',
+    () =>
+      state.checks.push(statusOf({ target_url: 'https://github.example/o/r/actions/runs/560' })),
+  ],
+  [
+    'a status naming another repository’s run',
+    () =>
+      state.checks.push(
+        statusOf({ target_url: 'https://github.example/evil/r/actions/runs/560/attempts/1' })
+      ),
+  ],
+  [
+    'a status naming a run of another workflow',
+    () => {
+      writer(561, '.github/workflows/spoof.yml', 'pull_request_target', 'success');
+      state.checks.push(statusOf({ target_url: attemptUrl(561) }));
+    },
+  ],
+  [
+    'a status naming a run on another event',
+    () => {
+      writer(562, '.github/workflows/cert-review.yml', 'pull_request', 'success');
+      state.checks.push(statusOf({ target_url: attemptUrl(562) }));
+    },
+  ],
+  [
+    'a success its attempt’s post job contradicts',
+    () => {
+      writer(563, '.github/workflows/cert-review.yml', 'pull_request_target', 'failure');
+      state.checks.push(statusOf({ target_url: attemptUrl(563) }));
+    },
+  ],
+  [
+    'a second status for one run attempt',
+    () => {
+      writer(564, '.github/workflows/cert-review.yml', 'pull_request_target', 'failure');
+      state.checks.push(
+        statusOf({ state: 'failure', target_url: attemptUrl(564) }),
+        statusOf({ state: 'failure', target_url: attemptUrl(564) })
+      );
+    },
+  ],
+  [
+    'any cert-review check run of another app',
+    () => state.checks.push(spoofCheck({ app: { id: 1, slug: 'evil' } })),
+  ],
+]) {
+  test(`post fails closed on ${name}`, async () => {
+    const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), setup);
+    assert.equal(r.code, 1, r.stdout);
+    assert.equal(check.state, 'failure');
+    assert.equal(check.description, 'another workflow wrote cert-review');
+    assert.equal(state.issues.length, 1);
+  });
+}
+
+test('an earlier genuine status of this workflow, matching its post job, is not a second writer (control)', async () => {
+  const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), () => {
+    writer(
+      565,
+      '.github/workflows/cert-review.yml@refs/heads/main',
+      'pull_request_target',
+      'failure'
+    );
+    state.runs['565'].workflow_url = `${origin}/repos/o/r/actions/required_workflows/9`;
+    state.checks.push(
+      statusOf({ state: 'failure', description: 'fail: 1 finding', target_url: attemptUrl(565) })
+    );
+  });
+  assert.equal(r.code, 0, r.stdout);
+  assert.equal(check.state, 'success');
+  assert.equal(state.issues.length, 0);
+});
+
+test('the fallback and the merge group set a status too; post and group hold statuses: write and checks: read only', () => {
+  const wf = readFileSync(join(root, '.github/workflows/cert-review.yml'), 'utf8');
+  assert.match(wf, /\/statuses\/\$\{e\.HEAD_SHA\}/);
+  assert.doesNotMatch(wf, /check-runs|checks: write/);
+  assert.equal(wf.split('      checks: read\n      statuses: write\n').length - 1, 2);
+  assert.doesNotMatch(readFileSync(join(cert, 'lib.mjs'), 'utf8'), /'check-runs', 'POST'/);
+});
+
+test('the merge group waits while the newest run on a member head is still queued, then judges it', async () => {
+  const runs = [runOf(31, '2026-10-19T02:00:00Z', { status: 'queued', conclusion: null })];
+  reset();
+  state.settleAfter = 3;
+  state.workflowRuns = runs;
+  state.jobs = { 31: [{ name: 'cert / post', conclusion: 'success' }] };
+  const file = join(scratch, 'group-wait.json');
+  writeFileSync(
+    file,
+    JSON.stringify({ merge_group: { head_sha: shas.docs, base_sha: shas.base } })
+  );
+  const r = await run('group.mjs', {
+    GITHUB_EVENT_PATH: file,
+    GUARD: 'PASS',
+    CERT_GROUP_WAIT_MS: '1',
+    CERT_GROUP_DEADLINE_MS: '5000',
+    RECEIPT: JSON.stringify({
+      status: 'PASS',
+      head: shas.docs,
+      members: [{ pr: 7, head: shas.code, status: 'PASS' }],
+    }),
+  });
+  const check = state.checks.find((c) => c.head_sha === shas.docs);
+  assert.equal(check.state, 'success', r.stdout);
+  assert.ok(state.polls >= 3);
+});
+
+test('the merge group stops at the first failing member', async () => {
+  reset();
+  const file = join(scratch, 'group-first.json');
+  writeFileSync(
+    file,
+    JSON.stringify({ merge_group: { head_sha: shas.docs, base_sha: shas.base } })
+  );
+  const r = await run('group.mjs', {
+    GITHUB_EVENT_PATH: file,
+    GUARD: 'PASS',
+    CERT_GROUP_WAIT_MS: '1',
+    CERT_GROUP_DEADLINE_MS: '50',
+    RECEIPT: JSON.stringify({
+      status: 'PASS',
+      head: shas.docs,
+      members: [
+        { pr: 7, head: shas.code, status: 'PASS' },
+        { pr: 8, head: shas.notes, status: 'PASS' },
+      ],
+    }),
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /#7 /);
+  assert.doesNotMatch(r.stdout, /#8 /);
+});
+
+test('a GET that answers 502 is retried, not taken as an answer', async () => {
+  const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), () => {
+    state.flaky = { [`/repos/o/r/commits/${shas.code}/statuses`]: 1 };
+  });
+  assert.equal(r.code, 0, r.stdout);
+  assert.equal(check.state, 'success');
+  assert.equal(
+    state.flaky[`/repos/o/r/commits/${shas.code}/statuses`],
+    0,
+    'the 502 was served and retried'
+  );
+});
+
+test('both fallbacks also run when the job is cancelled, so cert-review never waits forever', () => {
+  const wf = readFileSync(join(root, '.github/workflows/cert-review.yml'), 'utf8');
+  assert.equal(wf.split('if: (failure() || cancelled()) && steps.').length - 1, 2);
+});
+
+test('the merge-group deadline ends well inside the job timeout', () => {
+  const wf = readFileSync(join(root, '.github/workflows/cert-review.yml'), 'utf8');
+  const job = wf.slice(wf.indexOf('\n  group:\n'));
+  const timeout = Number(/timeout-minutes: (\d+)/.exec(job)[1]);
+  const deadline = Number(
+    /CERT_GROUP_DEADLINE_MS \?\? (\d+) \* 60000/.exec(
+      readFileSync(join(cert, 'group.mjs'), 'utf8')
+    )[1]
+  );
+  assert.ok(deadline + 2 < timeout, `${deadline} min deadline, ${timeout} min timeout`);
+});
+
+test('the fallback writes no second status for an attempt that already set one', async () => {
+  reset();
+  const wf = readFileSync(join(root, '.github/workflows/cert-review.yml'), 'utf8');
+  const fallback = /\n {2}FALLBACK: \|\n((?: {4}.*\n)+)/.exec(wf)[1].replace(/^ {4}/gm, '');
+  const env = {
+    ...process.env,
+    GITHUB_API_URL: origin,
+    GITHUB_SERVER_URL: 'https://github.example',
+    GITHUB_REPOSITORY: 'o/r',
+    GITHUB_RUN_ID: '4242',
+    GITHUB_RUN_ATTEMPT: '1',
+    GH_TOKEN: 'x',
+    HEAD_SHA: shas.code,
+    STAGE: 'post',
+    PR: '7',
+  };
+  const go = () =>
+    new Promise((done) => {
+      const c = spawn(process.execPath, ['--input-type=module', '-e', fallback], { env });
+      c.on('close', done);
+    });
+  await go();
+  assert.equal(state.checks.filter((c) => c.kind === 'status').length, 1);
+  await go();
+  assert.equal(
+    state.checks.filter((c) => c.kind === 'status').length,
+    1,
+    'no second status for attempt 1'
+  );
+});
+
+for (const [name, setup] of [
+  [
+    'a zero-padded run in a status target_url',
+    () => {
+      writer(566, '.github/workflows/cert-review.yml', 'pull_request_target', 'failure');
+      state.checks.push(
+        statusOf({ state: 'failure', target_url: attemptUrl(566) }),
+        statusOf({
+          state: 'failure',
+          target_url: 'https://github.example/o/r/actions/runs/0566/attempts/1',
+        })
+      );
+    },
+  ],
+  [
+    'a status replaying a run attempt that already wrote a check run',
+    () => {
+      writer(567, '.github/workflows/cert-review.yml', 'pull_request_target', 'failure');
+      state.checks.push(
+        spoofCheck({ external_id: `v2:7:${shas.code}:567:1`, conclusion: 'failure' }),
+        statusOf({ state: 'failure', target_url: attemptUrl(567) })
+      );
+    },
+  ],
+]) {
+  test(`post fails closed on ${name}`, async () => {
+    const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), setup);
+    assert.equal(r.code, 1, r.stdout);
+    assert.equal(check.description, 'another workflow wrote cert-review');
+  });
+}
+
+test('more than ten full pages of statuses is not judged: the writer check fails closed', async () => {
+  const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), () => {
+    for (let i = 0; i < 1000; i++)
+      state.checks.push(statusOf({ context: 'ci', name: 'ci', state: 'success' }));
+  });
+  assert.equal(r.code, 1, r.stdout);
+  assert.equal(check.description, 'incomplete: writer check; re-run');
 });

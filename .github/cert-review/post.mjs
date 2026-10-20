@@ -320,5 +320,6 @@ await setCheck(gh, {
 output({ checked: 'true', conclusion: r.conclusion });
 const line = `cert-review: ${r.conclusion} on ${head} (#${n}): ${r.title}`;
 console.log(line);
+console.log(redact(quiet(r.text)));
 summary(`${line}\n\n${redact(quiet(r.text))}`);
 process.exit(r.conclusion === 'success' ? 0 : 1);

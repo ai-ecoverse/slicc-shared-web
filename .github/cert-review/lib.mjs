@@ -8,6 +8,24 @@ export const MARKER = '<!-- cert-review v2 -->';
 export const ACTIONS_APP = 15368;
 export const WORKFLOW = process.env.CERT_WORKFLOW || '.github/workflows/cert-review.yml';
 
+export function ourPath(path, workflow = WORKFLOW) {
+  return path === workflow || path === `${workflow}@refs/heads/main`;
+}
+
+export function ourRun(run, repo, workflow = WORKFLOW) {
+  const origin = process.env.GITHUB_API_URL ?? 'https://api.github.com';
+  const url = String(run?.workflow_url ?? '');
+  const here = [
+    `${origin}/repos/${repo}/actions/workflows/`,
+    `${origin}/repos/${repo}/actions/required_workflows/`,
+  ];
+  return (
+    ourPath(run?.path, workflow) &&
+    run?.repository?.full_name === repo &&
+    here.some((p) => url.startsWith(p))
+  );
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 export const SCHEMA = JSON.parse(readFileSync(join(here, 'verdict.schema.json'), 'utf8'));
 
@@ -528,17 +546,31 @@ export function api(repo, token = process.env.GH_TOKEN) {
   const origin = process.env.GITHUB_API_URL ?? 'https://api.github.com';
   const call = async (route, method = 'GET', body) => {
     const url = route.startsWith('/') ? `${origin}${route}` : `${origin}/repos/${repo}/${route}`;
-    const r = await fetch(url, {
-      method,
-      headers: {
-        accept: 'application/vnd.github+json',
-        'x-github-api-version': '2022-11-28',
-        authorization: `Bearer ${token}`,
-        ...(body ? { 'content-type': 'application/json' } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(60000),
-    });
+    const once = () =>
+      fetch(url, {
+        method,
+        headers: {
+          accept: 'application/vnd.github+json',
+          'x-github-api-version': '2022-11-28',
+          authorization: `Bearer ${token}`,
+          ...(body ? { 'content-type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(60000),
+      });
+    let r;
+    for (let attempt = 0; ; attempt++) {
+      const retry = method === 'GET' && attempt < 3;
+      try {
+        r = await once();
+      } catch (err) {
+        if (!retry) throw err;
+        await new Promise((res) => setTimeout(res, 1000 * 2 ** attempt));
+        continue;
+      }
+      if (r.status < 500 || !retry) break;
+      await new Promise((res) => setTimeout(res, 1000 * 2 ** attempt));
+    }
     const text = await r.text();
     if (!r.ok) {
       const err = new Error(`GitHub ${method} ${route}: HTTP ${r.status} ${text.slice(0, 300)}`);
@@ -556,79 +588,102 @@ export function api(repo, token = process.env.GH_TOKEN) {
   return { call, graphql };
 }
 
-const EXTERNAL = /^v2:[^:]+:([0-9a-f]{40}):(\d+):(\d+)$/;
+const EXTERNAL = /^v2:[^:]+:([0-9a-f]{40}):([1-9]\d*):([1-9]\d*)$/;
 
-async function certChecks(gh, ref) {
-  const all = [];
+async function checkWrites(gh, ref) {
+  const out = [];
   for (let page = 1; page <= 10; page++) {
     const data = await gh.call(
       `commits/${sha(ref)}/check-runs?check_name=${CHECK}&filter=all&per_page=100&page=${page}`
     );
-    all.push(...data.check_runs.filter((c) => c.name === CHECK));
-    if (data.check_runs.length < 100) break;
+    for (const c of data.check_runs.filter((x) => x.name === CHECK)) {
+      const m = EXTERNAL.exec(c.external_id ?? '');
+      out.push({
+        url: c.html_url ?? `check run ${c.id}`,
+        who: c.app?.slug ?? String(c.app?.id),
+        ours: c.app?.id === ACTIONS_APP,
+        head: m?.[1],
+        run: m?.[2],
+        attempt: m?.[3],
+        said: c.status === 'completed' ? c.conclusion : 'pending',
+        kind: 'check run',
+      });
+    }
+    if (data.check_runs.length < 100) return out;
   }
-  return all;
+  throw new Error(`more than 1000 cert-review check runs on ${ref}: not judged`);
+}
+
+const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+const STATE = { success: 'success', pending: 'pending' };
+
+async function statusWrites(gh, ref, repo) {
+  const server = process.env.GITHUB_SERVER_URL ?? 'https://github.com';
+  const target = new RegExp(
+    `^${escapeRe(server)}/${escapeRe(repo)}/actions/runs/([1-9]\\d*)/attempts/([1-9]\\d*)$`
+  );
+  const out = [];
+  for (let page = 1; page <= 10; page++) {
+    const data = await gh.call(`commits/${sha(ref)}/statuses?per_page=100&page=${page}`);
+    for (const st of data.filter((x) => x.context === CHECK)) {
+      const m = target.exec(st.target_url ?? '');
+      out.push({
+        url: st.target_url || `status ${st.id}`,
+        who: st.creator?.login ?? 'unknown',
+        ours: st.creator?.login === 'github-actions[bot]',
+        head: m ? ref : undefined,
+        run: m?.[1],
+        attempt: m?.[2],
+        said: STATE[st.state] ?? 'failure',
+        kind: 'status',
+      });
+    }
+    if (data.length < 100) return out;
+  }
+  throw new Error(`more than 1000 statuses on ${ref}: not judged`);
 }
 
 const writerJob = (jobs, job) => jobs.find((j) => j.name === job || j.name.endsWith(` / ${job}`));
 
+async function judgeWrite(gh, w, ref, { events, job, repo }) {
+  let run;
+  try {
+    run = await gh.call(`actions/runs/${w.run}`);
+  } catch {
+    return `run ${w.run} does not exist`;
+  }
+  if (!ourRun(run, repo) || !events.includes(run.event) || run.head_sha !== ref)
+    return `run ${w.run} is ${run.path} on ${run.event}, not ${WORKFLOW} on ${events.join(' or ')} for this head`;
+  const jobs = (await gh.call(`actions/runs/${run.id}/attempts/${w.attempt}/jobs?per_page=100`))
+    .jobs;
+  const writer = writerJob(jobs, job);
+  if (!writer) return `run ${w.run} has no ${job} job`;
+  if (writer.status !== 'completed') return '';
+  const said = w.said === 'success';
+  const did = writer.conclusion === 'success';
+  if (said !== did && !(writer.conclusion === 'cancelled' && !said))
+    return `says ${w.said}, but run ${w.run}'s ${job} job ended ${writer.conclusion}`;
+  return '';
+}
+
 export async function foreignWriters(gh, ref, { event, job, repo }) {
   const events = Array.isArray(event) ? event : [event];
-  const all = await certChecks(gh, ref);
   const foreign = [];
-  const seen = new Map();
-  for (const c of all) {
+  const seen = new Set();
+  const all = [...(await checkWrites(gh, ref)), ...(await statusWrites(gh, ref, repo))];
+  for (const w of all) {
     const why = (reason) =>
-      foreign.push({
-        id: c.id,
-        url: c.html_url ?? `check run ${c.id}`,
-        app: c.app?.slug ?? c.app?.id,
-        reason,
-      });
-    if (c.app?.id !== ACTIONS_APP) {
-      why('written by another app');
-      continue;
+      foreign.push({ url: w.url, app: w.who, reason: `${w.kind}: ${reason}` });
+    const key = `${w.run}:${w.attempt}`;
+    if (!w.ours) why(`written by ${w.who}`);
+    else if (!w.run || w.head !== ref) why('names no run of this workflow for this head');
+    else if (w.said === 'pending') continue;
+    else if (seen.has(key)) why(`a second cert-review write for run ${w.run} attempt ${w.attempt}`);
+    else {
+      seen.add(key);
+      const reason = await judgeWrite(gh, w, ref, { events, job, repo });
+      if (reason) why(reason);
     }
-    const m = EXTERNAL.exec(c.external_id ?? '');
-    if (!m || m[1] !== ref) {
-      why('names no run of this workflow for this head');
-      continue;
-    }
-    const key = `${m[2]}:${m[3]}`;
-    if (seen.has(key)) {
-      why(`a second check run for run ${m[2]} attempt ${m[3]}`);
-      continue;
-    }
-    seen.set(key, c.id);
-    let run;
-    try {
-      run = await gh.call(`actions/runs/${m[2]}`);
-    } catch {
-      why(`run ${m[2]} does not exist`);
-      continue;
-    }
-    if (
-      run.path !== WORKFLOW ||
-      !events.includes(run.event) ||
-      run.head_sha !== ref ||
-      run.repository?.full_name !== repo
-    ) {
-      why(
-        `run ${m[2]} is ${run.path} on ${run.event}, not ${WORKFLOW} on ${events.join(' or ')} for this head`
-      );
-      continue;
-    }
-    const jobs = (await gh.call(`actions/runs/${run.id}/attempts/${m[3]}/jobs?per_page=100`)).jobs;
-    const writer = writerJob(jobs, job);
-    if (!writer) {
-      why(`run ${m[2]} has no ${job} job`);
-      continue;
-    }
-    if (writer.status !== 'completed') continue;
-    const said = c.conclusion === 'success';
-    const did = writer.conclusion === 'success';
-    if (said !== did && !(writer.conclusion === 'cancelled' && !said))
-      why(`says ${c.conclusion}, but run ${m[2]}'s ${job} job ended ${writer.conclusion}`);
   }
   return foreign;
 }
@@ -644,16 +699,13 @@ export async function alert(gh, ref, foreign, runUrl) {
   return 'opened';
 }
 
-export function setCheck(gh, { pr, head, runId, runUrl, conclusion, title, summary }) {
-  return gh.call('check-runs', 'POST', {
-    name: CHECK,
-    head_sha: sha(head),
-    external_id: `v2:${pr}:${head}:${runId}:${process.env.GITHUB_RUN_ATTEMPT ?? '1'}`,
-    details_url: runUrl,
-    status: 'completed',
-    conclusion,
-    completed_at: new Date().toISOString(),
-    output: { title: String(title).slice(0, 200), summary: String(summary).slice(0, 60000) },
+export function setCheck(gh, { head, runUrl, conclusion, title }) {
+  const attempt = process.env.GITHUB_RUN_ATTEMPT ?? '1';
+  return gh.call(`statuses/${sha(head)}`, 'POST', {
+    state: conclusion === 'success' ? 'success' : 'failure',
+    context: CHECK,
+    description: String(title).slice(0, 140),
+    target_url: `${runUrl}/attempts/${attempt}`,
   });
 }
 
