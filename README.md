@@ -8,7 +8,7 @@ Configuration shared by SLICC's web repos ([slicc-bios](https://github.com/ai-ec
 | `.github/workflows/pipeline.yml` | The one reusable workflow, described [below](#pipeline): lint on every event; on pull requests and in the merge queue a staging deploy (if any) and sharded integration tests; on pull requests a Claude and a Codex review; on `main` a release | `jobs: { ci: { uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@vX.Y.Z, secrets: inherit } }` |
 | `biome.json` | Formatter settings and slicc's strict linter: cognitive complexity ≤ 25, functions ≤ 150 lines, no unused variables or imports, no floating or misused promises, naming conventions, `import type`/`export type`. Test files under `test/` get slicc's test exemptions | `biome.json`: `{ "extends": ["@ai-ecoverse/slicc-shared-web/biome"] }` |
 | `tsconfig.json` | TypeScript base for Node's type stripping | `tsconfig.json`: `{ "extends": "@ai-ecoverse/slicc-shared-web/tsconfig.json", "include": ["src/**/*.ts"] }` |
-| `lefthook.yml` | Pre-commit hooks: Biome, typecheck, no comments, no unit tests in git, AGENTS.md, and diff coverage over [only the unit tests the change reaches](#which-unit-tests-a-commit-runs) | `lefthook.yml`: `extends: [node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml]` |
+| `lefthook.yml` | Pre-commit hooks: Biome, typecheck, no comments, no unit tests in git, AGENTS.md, and diff coverage over [only the unit tests the change reaches](#which-unit-tests-a-commit-runs) | `lefthook.yml`: the [fail-closed snippet below](#hooks-that-fail-closed) |
 | `mcr.config.mjs` | Unit-test coverage for JS and TS sources in `src/` (TS types are stripped first), written to `coverage/unit/lcov.info`. Every source file is in it, tested or not, and paths are matched relative to the repo root, so a checkout under a dot-directory such as `~/.bb/` still reports untested files to diff coverage. With `SLICC_UNIT_TESTS` set, `node --test` runs only those files ([below](#which-unit-tests-a-commit-runs)) | `test:unit`: `mcr -c node_modules/@ai-ecoverse/slicc-shared-web/mcr.config.mjs node --test 'test/unit/**/*.test.mjs'` |
 | `bin/` | `slicc-lint` runs every check below plus Biome and, if the repo has one, `typecheck`. Every step prints its own `<step>: PASS …` line, and slicc-lint checks for it: a step that exits 0 without one fails the run with exit 70 (`slicc-lint: FAIL <step> (no PASS line from it)`), so a check that silently stops early can't pass. The last line, `slicc-lint: PASS`, comes only after every step has printed its PASS, and a gate can require it. `slicc-lint-comments` runs the [slicc no-comment checker](https://github.com/ai-ecoverse/slicc/tree/main/packages/dev-tools/no-comment) at a pinned commit, allowing AGENTS.md and [`# renovate:` annotations](#versions-pinned-in-workflow-files) in workflow and action files. `slicc-agents-md`, `slicc-no-unit-tests` and `slicc-diff-cover` complete the set, and `slicc-unit-cover` is the diff-coverage hook. `slicc-minidump <file.dmp>...` prints a crash dump's stack, described [below](#crash-dumps). `slicc-memory-peak` prints the job's [memory peak](#memory-peak) | `lint`: `slicc-lint`, and the hooks above |
 | `pnpmfile.mjs` | pnpm's counterpart to the Renovate preset: an `updateConfig` hook that adds `@ai-ecoverse/*` to `minimumReleaseAgeExclude`, so pnpm 12 doesn't hold back our own fresh releases (`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`) while third-party packages keep its age check | in a repo with a pnpm lockfile, as a [config dependency](https://pnpm.io/config-dependencies) in `pnpm-workspace.yaml`: `configDependencies: { '@ai-ecoverse/slicc-shared-web': X.Y.Z }` plus `pnpmfile: node_modules/.pnpm-config/@ai-ecoverse/slicc-shared-web/pnpmfile.mjs` |
@@ -186,6 +186,24 @@ A workflow gets the line from the composite action, as its last step:
       - uses: ai-ecoverse/slicc-shared-web/.github/actions/memory-peak@<tag or sha>
         if: always()
 ```
+
+## Hooks that fail closed
+
+Git hooks live in the repo's `.git/hooks/`, which every worktree shares, so a commit can run in a worktree where `npm install` never ran. A repo's `lefthook.yml` makes that commit fail instead of skip the hooks:
+
+```yaml
+assert_lefthook_installed: true
+extends:
+  - node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml
+pre-commit:
+  jobs:
+    - name: shared hooks
+      run: |
+        test -f node_modules/@ai-ecoverse/slicc-shared-web/lefthook.yml || { echo 'slicc-shared-web is not installed in this worktree, so its hooks cannot run: run npm install'; exit 1; }
+```
+
+- **No lefthook anywhere:** with `assert_lefthook_installed` (the shared config sets it too) the git hook exits 1 with lefthook's "Can't find lefthook in PATH … Operation is aborted", where it used to print the first line and exit 0.
+- **Lefthook found, no `node_modules` here:** the generated hook calls the lefthook of the checkout that installed it, by absolute path, so it still runs; but lefthook skips an `extends` file that doesn't exist, which would leave no jobs and pass the commit. The `shared hooks` job lives in the repo's own config, so it runs and fails with `run npm install`.
 
 ## Which unit tests a commit runs
 
