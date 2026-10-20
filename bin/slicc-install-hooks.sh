@@ -7,5 +7,5 @@ if [ -f "$own" ]; then
     *worktree-hooks*) git config --file "$own" --unset-all core.hooksPath ;;
   esac
 fi
-git config core.hooksPath node_modules/.git-hooks
+git config core.hooksPath "$(git rev-parse --show-prefix)node_modules/.git-hooks"
 exec lefthook install --force "$@"

@@ -281,3 +281,16 @@ test('outside a git checkout it does nothing and exits 0', () => {
   assert.equal(run.stdout + run.stderr, '');
   assert.deepEqual(readdirSync(dir), []);
 });
+
+test('a package in a subdirectory gets its hooks in its own node_modules', () => {
+  const { main, a } = fixture();
+  const pkg = join(main, 'pkg');
+  mkdirSync(pkg);
+  modules(pkg);
+  install(pkg);
+  assert.equal(ok(main, 'config', 'core.hooksPath'), 'pkg/node_modules/.git-hooks');
+  assert.ok(existsSync(join(pkg, 'node_modules', '.git-hooks', 'pre-commit')));
+  assert.equal(existsSync(join(main, 'node_modules', '.git-hooks')), false);
+  ranWith(commit(main, 'from the root'), pkg, [a]);
+  assert.equal(git(main, ['config', '--get', 'extensions.worktreeConfig']).status, 1);
+});
