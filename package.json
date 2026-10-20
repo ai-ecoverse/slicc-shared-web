@@ -34,6 +34,7 @@
   "bin": {
     "slicc-agents-md": "bin/slicc-agents-md.sh",
     "slicc-diff-cover": "bin/slicc-diff-cover.sh",
+    "slicc-install-hooks": "bin/slicc-install-hooks.sh",
     "slicc-lint": "bin/slicc-lint.sh",
     "slicc-lint-comments": "bin/slicc-lint-comments.sh",
     "slicc-memory-peak": "bin/slicc-memory-peak.sh",
@@ -53,6 +54,7 @@
     "unit"
   ],
   "scripts": {
+    "prepare": "bin/slicc-install-hooks.sh",
     "lint": "bin/slicc-lint.sh && shellcheck bin/*.sh",
     "pretest": "playwright-core install --no-shell chromium",
     "test": "SLICC_PROFILE=1 node --test --test-global-setup=harness/global.mjs test/integration/*.test.mjs && node test/integration/verify.mjs",
@@ -64,6 +66,7 @@
   "devDependencies": {
     "@ai-ecoverse/slicc-browsers": "1.11.0",
     "@biomejs/biome": "2.5.15",
+    "lefthook": "2.2.2",
     "monocart-coverage-reports": "2.13.2",
     "playwright-core": "1.64.0",
     "pnpm": "12.13.0",
