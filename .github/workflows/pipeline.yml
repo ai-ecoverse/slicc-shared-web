@@ -266,7 +266,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          path: head
           persist-credentials: false
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -280,7 +279,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
 
       - run: |
-          (cd head && npm ci)
+          npm ci
           (cd base && npm ci)
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -294,7 +293,6 @@ jobs:
           path: review/context
 
       - name: Four browsers
-        working-directory: head
         env:
           CHROME: ${{ inputs.chrome }}
           REVIEW_BROWSER: ${{ inputs.review-browser }}
@@ -312,9 +310,11 @@ jobs:
                 --enable-unsafe-extension-debugging --remote-debugging-port="$port" \
                 --user-data-dir="$profile" about:blank > "$profile.log" 2>&1 &
               for _ in $(seq 50); do curl -fs "http://127.0.0.1:$port/json/version" > /dev/null && break; sleep 0.2; done
-              (cd "$GITHUB_WORKSPACE/$side" && SLICC_REVIEW_SIDE=$side SLICC_REVIEW_LINK=$link \
+              tree=$GITHUB_WORKSPACE
+              [ "$side" = head ] || tree=$GITHUB_WORKSPACE/base
+              (cd "$tree" && SLICC_REVIEW_SIDE=$side SLICC_REVIEW_LINK=$link \
                 SLICC_REVIEW_CDP="http://127.0.0.1:$port" bash -c "$REVIEW_BROWSER")
-              list="$list{\"side\":\"$side\",\"link\":\"$link\",\"cdp\":\"http://127.0.0.1:$port\",\"tree\":\"$side\"},"
+              list="$list{\"side\":\"$side\",\"link\":\"$link\",\"cdp\":\"http://127.0.0.1:$port\",\"tree\":\"$tree\"},"
               port=$((port + 1))
             done
           done
@@ -332,8 +332,8 @@ jobs:
           Review pull request $PR of $REPO.
 
           The working directory holds:
-          - head/: the pull request's head, dependencies installed.
-          - base/: its base, dependencies installed.
+          - .: the pull request's head, dependencies installed.
+          - base/: its base, dependencies installed. Leave it out of the review itself; it is there to compare with.
           - review/context/: the pull request (pr.json, pr.diff, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json).
           - review/integration/: the integration tests' coverage, artifacts (screenshots, CPU profiles, crash dumps, console logs) and JUnit reports, one directory per shard.
           - review/browsers.json: four running Chrome instances, reachable over CDP: head and base, each linked through the extension and through slicc-cli. Use them to compare the head's behaviour with the base's.
@@ -343,7 +343,7 @@ jobs:
           Answer with JSON that matches the schema you were given:
           - verdict: "approved" or "denied".
           - summary: a few sentences on the change and your verdict.
-          - comments: findings on lines the pull request adds or changes, with path relative to the repository root and the line number in head/.
+          - comments: findings on lines the pull request adds or changes, with path relative to the repository root and the line number in the head.
           - issues: problems worth tracking outside this pull request, each with repo as owner/name, a title and a body.
 
           $EXTRA
@@ -375,6 +375,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/codex-home"
           echo 'model_provider = "amazon-bedrock-runtime"' > "$RUNNER_TEMP/codex-home/config.toml"
+          echo '{"port":0}' > "$RUNNER_TEMP/codex-home/$GITHUB_RUN_ID.json"
 
       - if: matrix.agent == 'codex'
         uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675
