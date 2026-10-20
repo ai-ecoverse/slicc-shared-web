@@ -59,26 +59,44 @@ async function runsOf(memberHead) {
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id);
 }
 
+const DEADLINE = Date.now() + Number(env.CERT_GROUP_DEADLINE_MS ?? 12 * 60000);
+
+async function jobsOf(r) {
+  return (await gh.call(`actions/runs/${r.id}/attempts/${r.run_attempt}/jobs?per_page=100`)).jobs;
+}
+
+function isNoop(r, jobs) {
+  return (
+    r.status === 'completed' &&
+    r.conclusion !== 'cancelled' &&
+    jobs.length > 0 &&
+    jobs.every((j) => j.conclusion === 'skipped') &&
+    NOOP.every((n) => jobs.some((j) => named(j, n)))
+  );
+}
+
 async function settled(memberHead) {
-  for (let i = 0; ; i++) {
+  for (;;) {
     const runs = await runsOf(memberHead);
-    if (runs[0]?.status === 'completed' || !runs.length || i >= 6) return runs;
-    await new Promise((r) => setTimeout(r, WAIT));
+    const out = [];
+    let pending = false;
+    for (const r of runs) {
+      const jobs = r.status === 'completed' ? await jobsOf(r) : [];
+      out.push({ r, jobs });
+      if (isNoop(r, jobs)) continue;
+      pending = r.status !== 'completed';
+      break;
+    }
+    if (!pending || Date.now() >= DEADLINE) return out;
+    await new Promise((res) => setTimeout(res, WAIT));
   }
 }
 
 async function verdictRun(memberHead, pr) {
-  for (const r of await settled(memberHead)) {
+  for (const { r, jobs } of await settled(memberHead)) {
     const url = r.html_url ?? `run ${r.id}`;
     if (r.status !== 'completed') return { problem: `${url} on this head is still ${r.status}` };
-    const jobs = (await gh.call(`actions/runs/${r.id}/attempts/${r.run_attempt}/jobs?per_page=100`))
-      .jobs;
-    const noop =
-      r.conclusion !== 'cancelled' &&
-      jobs.length > 0 &&
-      jobs.every((j) => j.conclusion === 'skipped') &&
-      NOOP.every((n) => jobs.some((j) => named(j, n)));
-    if (noop) continue;
+    if (isNoop(r, jobs)) continue;
     const prs = r.pull_requests ?? [];
     if (
       !prs.some((p) => p.number === pr && p.base?.ref === 'main') ||
@@ -140,7 +158,10 @@ try {
   if (env.GUARD !== 'PASS' && receipt.members.every((m) => m.status === 'PASS'))
     throw new Error(`cert-self-guard returned ${env.GUARD}`);
   prs = receipt.members.map((m) => `#${m.pr}`);
-  for (const m of receipt.members) rows.push(await member(m));
+  for (const m of receipt.members) {
+    rows.push(await member(m));
+    if (!rows.at(-1).ok) break;
+  }
 } catch (err) {
   problem = err.message;
   rows = [];
