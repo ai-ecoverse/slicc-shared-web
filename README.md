@@ -170,6 +170,25 @@ jobs:
       AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
 ```
 
+- **Ready and approval re-run themselves** (`cert-rerun.yml`): under an org "require workflows" ruleset, cert-review starts only on `opened`, `synchronize` and `reopened`, so marking a pull request ready or adding `cert-review-approved` starts nothing. Each repository also has a small second caller (the workflow must not be named `cert-review`):
+
+  ```yaml
+  name: cert-rerun
+  on:
+    pull_request_target:
+      branches: [main]
+      types: [ready_for_review, labeled]
+  permissions: {}
+  jobs:
+    rerun:
+      uses: ai-ecoverse/slicc-shared-web/.github/workflows/cert-rerun.yml@<sha>
+      permissions:
+        actions: write
+      with:
+        tools-ref: <the same sha>
+  ```
+
+  It runs only main's code (no checkout of the pull request) with `actions: write` and nothing else, so it never writes `cert-review`. It does nothing for a fork, a draft, or a label other than the approval label. Otherwise it finds the newest run of the caller on the head (`actions/runs?event=pull_request_target&head_sha=`, the caller's path or that path `@refs/heads/main`, a `workflows/` or `required_workflows/` URL of this repository) and re-runs all its jobs; a run still in progress is left alone. The re-run's plan reads draft, base and fork from the live pull request and fails as incomplete if the head moved, and post sets success only while the pull request is open, ready, into `main` and at this head. No pull request needs a manual "re-run all jobs". Its runs are on another path, so plan, post and the merge group never count them as cert-review runs.
 - **Jobs** (`cert / …`): `self-guard` (cert-self-guard v1.24.2, pinned), `plan` (read-only: fork, draft, cert path, not behaviour, too large, or review), `review` (Claude on Bedrock with Read/Glob/Grep only, no Bash/Write/Web, structured output in `verdict.schema.json`, `contents: read`, the key in that step only), `post` (the only writer of `cert-review`: validates the verdict, re-anchors comments into diff hunks, posts one review, `REQUEST_CHANGES` on a failure, and runs a code-only prompt-injection and opaque-file scan that can only fail a pass), and `merge group` (code only: each member's newest run of the caller on its head must have certified it; it waits while that run is still queued or running, up to 7 minutes shared across the members, passes over finished noop runs only, and stops at the first member that isn't certified). GitHub API reads are retried on 5xx and network errors, and both fallbacks also run when a job is cancelled.
 - **CI evidence** (`evidence-workflow`, `evidence-artifacts`, optional): for a repository whose certification needs pull-request code to run (tests, scripted scenarios), that code runs in the repository's own CI workflow on `pull_request`, with no secrets and a read-only token, and uploads artifacts. The `evidence` job (`contents`/`actions: read`, no secrets, no pull-request code) waits up to `evidence-wait-minutes` for that workflow's newest `pull_request` run on the head (this repository, this pull request), takes the newest finished `push` run on the base branch at or behind the base, downloads the artifacts whose names match by id, checks each zip's sha256 against its digest, unpacks it into `<side>/<artifact id>/` without links, binary files and the head side's images (no code can scan an image's text; main's images stay) or more than four times `evidence-max-mb` in total, scans the head side's text for bidi or zero-width controls and reviewer-aimed text, and uploads one `cert-review-evidence` artifact that the review downloads by id. Post checks that the run's only evidence artifact has the evidence job's id and digest. The newest artifact of each name is taken, and only if it was made in the run's latest attempt; unsafe names are skipped. The prompt names both runs; the head side is data written by the pull request's code. A missing run, artifact or digest, or another evidence artifact, is `incomplete: evidence`, never a review; an injection hit in the evidence fails the check in code, except under `evidence-notes` (globs of `<artifact>/<path>` the caller marks as upstream data, such as a dependency tarball's diff), where it is a suspect note for the review. The evidence workflow is part of the cert path (every workflow is in the default guard paths).
 - **Code check** (`code-check`, optional): a command the `evidence` job runs from the caller's tree at main (on the bootstrap `pull_request` leg, the head's), after `npm ci --ignore-scripts`, with `BASE_SHA` (the merge base), `HEAD_SHA` (fetched as objects, never checked out on `pull_request_target`) and a read-only `GH_TOKEN`. A non-zero exit, or no result, is a fail finding in code with the output's verdict line; the full output is evidence for the review. slicc-bios runs its pin release-state this way, so the pull request's own code can't make it pass.

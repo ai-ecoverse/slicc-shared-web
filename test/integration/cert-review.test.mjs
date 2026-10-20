@@ -177,6 +177,10 @@ function handle(req, res, body) {
         ),
     });
   }
+  if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/rerun$/.exec(p)) && req.method === 'POST') {
+    state.reruns = [...(state.reruns ?? []), Number(m[1])];
+    return reply(res, 201);
+  }
   if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs$/.exec(p)))
     return reply(res, 200, { jobs: state.jobs[m[1]] ?? [] });
   if ((m = /^\/repos\/o\/r\/actions\/artifacts\/(\d+)\/zip$/.exec(p))) {
@@ -2115,4 +2119,182 @@ test('evidence-notes: an injection-shaped line in upstream data (a dependency di
     2,
     'without the input both lines count'
   );
+});
+
+test('live pull request: a run re-run after marking ready reviews it (plan reads draft from the live PR, not the stale payload)', async () => {
+  const file = event('live-ready', shas.code, { pull: { draft: true } });
+  state.pulls['7'].draft = false;
+  const p = await run('plan.mjs', {
+    GITHUB_EVENT_PATH: file,
+    GUARD: 'PASS',
+    RECEIPT: receipt(shas.code),
+  });
+  assert.equal(p.outputs.kind, 'review', p.stdout);
+  const back = event('live-draft', shas.code);
+  state.pulls['7'].draft = true;
+  const d = await run('plan.mjs', {
+    GITHUB_EVENT_PATH: back,
+    GUARD: 'PASS',
+    RECEIPT: receipt(shas.code),
+  });
+  assert.equal(d.outputs.kind, 'decided', d.stdout);
+  assert.match(d.outputs.title, /draft/i);
+});
+
+test('live pull request: a re-run whose head moved fails as incomplete, and never reviews the old head', async () => {
+  const file = event('live-moved', shas.code);
+  state.pulls['7'].head = { ...state.pulls['7'].head, sha: shas.docs };
+  const p = await run('plan.mjs', {
+    GITHUB_EVENT_PATH: file,
+    GUARD: 'PASS',
+    RECEIPT: receipt(shas.code),
+  });
+  assert.equal(p.outputs.kind, 'decided', p.stdout);
+  assert.equal(p.outputs.conclusion, 'failure');
+  assert.equal(p.outputs.title, 'incomplete: the head moved; a newer run reviews it');
+});
+
+test('live pull request: post never sets success on a pull request made draft (or retargeted) after plan', async () => {
+  for (const change of [{ draft: true }, { base: { sha: shas.base, ref: 'release' } }]) {
+    reset();
+    const file = event('live-post', shas.code);
+    Object.assign(state.pulls['7'], change);
+    const r = await run('post.mjs', {
+      GITHUB_EVENT_PATH: file,
+      KIND: 'decided',
+      CONCLUSION: 'success',
+      TITLE: 'not behaviour: docs',
+      SUMMARY: 'docs',
+      ARTIFACTS: 'success',
+    });
+    const check = state.checks.at(-1);
+    assert.equal(check.conclusion, 'failure', r.stdout);
+    assert.equal(check.output.title, 'incomplete: not current; re-run');
+  }
+});
+
+function rerunEvent(name, action, pull = {}, extra = {}) {
+  const file = join(scratch, `${name}.json`);
+  writeFileSync(
+    file,
+    JSON.stringify({
+      action,
+      pull_request: {
+        number: 7,
+        draft: false,
+        head: { sha: shas.code, repo: { full_name: 'o/r' } },
+        base: { sha: shas.base, ref: 'main' },
+        ...pull,
+      },
+      ...extra,
+    })
+  );
+  return file;
+}
+
+const certRun = (id, extra = {}) => ({
+  id,
+  head_sha: shas.code,
+  event: 'pull_request_target',
+  status: 'completed',
+  path: '.github/workflows/cert-review.yml',
+  created_at: `2026-10-20T09:0${id % 10}:00Z`,
+  ...extra,
+});
+
+test('cert-rerun: marking ready or the approval label re-runs every job of the newest cert-review run on the head; a running one is left alone', async () => {
+  reset();
+  state.reruns = [];
+  state.workflowRuns = [
+    certRun(11),
+    certRun(12, {
+      path: '.github/workflows/cert-review.yml@refs/heads/main',
+      workflow_url: `${origin}/repos/o/r/actions/required_workflows/3`,
+    }),
+    certRun(19, { path: '.github/workflows/cert-rerun.yml' }),
+    certRun(18, { path: '.github/workflows/cert-review.yml', repository: { full_name: 'x/fork' } }),
+    certRun(17, { head_sha: shas.docs }),
+  ];
+  const ready = await run('rerun.mjs', {
+    GITHUB_EVENT_PATH: rerunEvent('rr-ready', 'ready_for_review'),
+  });
+  assert.equal(ready.code, 0, ready.stdout);
+  assert.deepEqual(
+    state.reruns,
+    [12],
+    'the org-required run, the newest of ours; not cert-rerun, a fork’s or another head’s'
+  );
+  const label = await run('rerun.mjs', {
+    GITHUB_EVENT_PATH: rerunEvent(
+      'rr-label',
+      'labeled',
+      {},
+      { label: { name: 'cert-review-approved' } }
+    ),
+  });
+  assert.equal(label.code, 0, label.stdout);
+  assert.deepEqual(state.reruns, [12, 12]);
+  state.workflowRuns.push(certRun(13, { status: 'in_progress' }));
+  const busy = await run('rerun.mjs', {
+    GITHUB_EVENT_PATH: rerunEvent('rr-busy', 'ready_for_review'),
+  });
+  assert.match(busy.stdout, /skip: cert-review run 13 .* is in_progress/);
+  assert.deepEqual(state.reruns, [12, 12]);
+});
+
+test('cert-rerun: a fork, a draft, another label or another action is a no-op; no cert-review run to re-run fails visibly', async () => {
+  reset();
+  state.reruns = [];
+  state.workflowRuns = [certRun(11)];
+  for (const [name, action, pull, extra, why] of [
+    [
+      'rr-fork',
+      'ready_for_review',
+      { head: { sha: shas.code, repo: { full_name: 'x/fork' } } },
+      {},
+      /noop \(a fork/,
+    ],
+    [
+      'rr-draft',
+      'labeled',
+      { draft: true },
+      { label: { name: 'cert-review-approved' } },
+      /noop \(a draft/,
+    ],
+    [
+      'rr-other',
+      'labeled',
+      {},
+      { label: { name: 'documentation' } },
+      /noop \(label documentation\)/,
+    ],
+    ['rr-sync', 'synchronize', {}, {}, /noop \(action synchronize\)/],
+  ]) {
+    const r = await run('rerun.mjs', { GITHUB_EVENT_PATH: rerunEvent(name, action, pull, extra) });
+    assert.equal(r.code, 0, r.stdout);
+    assert.match(r.stdout, why);
+  }
+  assert.deepEqual(state.reruns, []);
+  state.workflowRuns = [];
+  const none = await run('rerun.mjs', {
+    GITHUB_EVENT_PATH: rerunEvent('rr-none', 'ready_for_review'),
+  });
+  assert.equal(none.code, 1);
+  assert.match(none.stdout, /FAIL no cert-review run/);
+});
+
+test('cert-rerun.yml: actions: write only, no checkout of the pull request, not named cert-review, the same gates as rerun.mjs', () => {
+  const wf = readFileSync(join(root, '.github/workflows/cert-rerun.yml'), 'utf8');
+  assert.match(wf, /^name: cert-rerun\n/);
+  assert.match(wf, /\npermissions: \{\}\n/);
+  assert.match(wf, /\n {4}permissions:\n {6}actions: write\n {4}steps:/);
+  assert.doesNotMatch(
+    wf,
+    /actions\/checkout|pull_request\.head\.sha|statuses|checks:|pull-requests:|contents:/
+  );
+  assert.match(
+    wf,
+    /github\.event\.pull_request\.head\.repo\.full_name == github\.repository && !github\.event\.pull_request\.draft/
+  );
+  assert.match(wf, /github\.event\.label\.name == inputs\.approval-label/);
 });

@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 import {
+  api,
   decide,
   diffOf,
   diffSize,
   git,
   globs,
+  livePull,
   noop,
   output,
   sha,
@@ -31,6 +33,24 @@ if (
   process.exit(0);
 }
 
+let live;
+try {
+  live = await livePull(api(repo), pull);
+} catch (err) {
+  console.log(`cert-review plan: failure #${pull.number} ${head}: ${err.message}`);
+  output({
+    kind: 'decided',
+    conclusion: 'failure',
+    title: err.moved
+      ? 'incomplete: the head moved; a newer run reviews it'
+      : 'incomplete: plan; re-run',
+    summary: err.moved
+      ? `${err.message}. This run's head is not the pull request's head any more.`
+      : `Reading the live pull request failed: ${err.message}.`,
+  });
+  process.exit(0);
+}
+
 const fileAt = (commit) => {
   try {
     return git('show', `${sha(commit)}:${WORKFLOW}`);
@@ -47,7 +67,7 @@ const mainTip = () => {
     return sha(pull.base.sha);
   }
 };
-const fork = pull.head.repo?.full_name !== repo;
+const fork = live.head.repo?.full_name !== repo;
 const onMain = fileAt(mainTip());
 const target = /^\s*pull_request_target:/m.test(onMain);
 if (env.GITHUB_EVENT_NAME === 'pull_request' && target) {
@@ -63,7 +83,7 @@ const uses = [
     /ai-ecoverse\/slicc-shared-web\/\.github\/workflows\/cert-review\.yml@([0-9a-f]{40})/g
   ),
 ].map((m) => m[1]);
-if (!fork && pull.base.ref === 'main' && (uses.length !== 1 || uses[0] !== env.CERT_TOOLS_REF)) {
+if (!fork && live.base.ref === 'main' && (uses.length !== 1 || uses[0] !== env.CERT_TOOLS_REF)) {
   const title = 'incomplete: tools-ref is not the pinned cert-review; re-run';
   const summaryText = `${WORKFLOW} on main must call slicc-shared-web's cert-review.yml at exactly one sha and pass that sha as tools-ref (found ${uses.join(', ') || 'none'}, tools-ref ${env.CERT_TOOLS_REF || 'empty'}).`;
   console.log(`cert-review plan: failure: ${title}`);
@@ -76,9 +96,9 @@ const paths = touchedPaths(files);
 const d = decide({
   fork,
   repo,
-  baseRef: pull.base.ref,
+  baseRef: live.base.ref,
   size: diffSize(files),
-  draft: pull.draft === true,
+  draft: live.draft === true,
   approval: env.APPROVAL,
   guard: env.GUARD,
   receipt: env.RECEIPT,
