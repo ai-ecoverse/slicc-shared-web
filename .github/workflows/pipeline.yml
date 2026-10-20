@@ -36,12 +36,11 @@ on:
       review-prompt:
         type: string
         default: ''
+      review-renovate:
+        type: string
+        default: ''
     secrets:
-      ANTHROPIC_API_KEY:
-        required: false
-      CLAUDE_CODE_OAUTH_TOKEN:
-        required: false
-      OPENAI_API_KEY:
+      AWS_BEARER_TOKEN_BEDROCK:
         required: false
       SLICC_ISSUES_TOKEN:
         required: false
@@ -60,6 +59,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       shards: ${{ steps.shards.outputs.shards }}
+      review: ${{ steps.review.outputs.review }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -79,6 +79,22 @@ jobs:
         env:
           SHARDS: ${{ inputs.shards }}
         run: echo "shards=$(node -p "JSON.stringify([...Array(Math.max(1, $SHARDS)).keys()])")" >> "$GITHUB_OUTPUT"
+
+      - id: review
+        env:
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.head_ref }}
+          RENOVATE_GROUPS: ${{ inputs.review-renovate }}
+        run: |
+          node --input-type=module <<'EOF' | tee -a "$GITHUB_OUTPUT"
+          import { matchesGlob } from 'node:path';
+          const { EVENT, BRANCH, RENOVATE_GROUPS } = process.env;
+          const slug = BRANCH.replace(/^renovate\//, '').replace(/^major-/, '');
+          const groups = RENOVATE_GROUPS.split('\n').map((group) => group.trim()).filter(Boolean);
+          const renovate = BRANCH.startsWith('renovate/');
+          const review = EVENT === 'pull_request' && (!renovate || groups.some((group) => matchesGlob(slug, group)));
+          console.log(`review=${review}`);
+          EOF
 
   deploy:
     needs: lint
@@ -210,7 +226,7 @@ jobs:
 
   context:
     needs: lint
-    if: github.event_name == 'pull_request'
+    if: needs.lint.outputs.review == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -234,9 +250,9 @@ jobs:
           name: context
           path: context/
 
-  review:
-    needs: [test, deploy, context]
-    if: github.event_name == 'pull_request' && !cancelled() && needs.test.result != 'skipped' && needs.context.result == 'success' && needs.deploy.result != 'failure'
+  reviewer:
+    needs: [lint, test, deploy, context]
+    if: needs.lint.outputs.review == 'true' && !cancelled() && needs.test.result != 'skipped' && needs.context.result == 'success' && needs.deploy.result != 'failure'
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 60
     permissions:
@@ -336,13 +352,16 @@ jobs:
       - id: claude
         if: matrix.agent == 'claude'
         uses: anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.CERT_AWS_REGION || 'us-west-2' }}
         with:
           prompt: Follow the instructions in review/prompt.txt.
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_bedrock: 'true'
           github_token: ${{ github.token }}
           allowed_bots: renovate[bot]
           claude_args: >-
+            --model ${{ vars.CERT_BEDROCK_MODEL || 'global.anthropic.claude-opus-5-5' }}
             --allowedTools Bash,Read,Glob,Grep,WebFetch
             --json-schema '${{ env.FINDINGS_SCHEMA }}'
 
@@ -352,12 +371,22 @@ jobs:
         run: printf '%s' "$FINDINGS" > review/findings.json
 
       - if: matrix.agent == 'codex'
+        name: Codex on Bedrock
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-home"
+          echo 'model_provider = "amazon-bedrock"' > "$RUNNER_TEMP/codex-home/config.toml"
+
+      - if: matrix.agent == 'codex'
         uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.CERT_AWS_REGION || 'us-west-2' }}
         with:
           prompt-file: review/prompt.txt
           output-file: review/findings.json
           output-schema: ${{ env.FINDINGS_SCHEMA }}
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-home: ${{ runner.temp }}/codex-home
+          model: ${{ vars.CODEX_BEDROCK_MODEL || 'openai.gpt-5.6-sol' }}
           sandbox: danger-full-access
           allow-bot-users: renovate
 
@@ -369,8 +398,8 @@ jobs:
           if-no-files-found: ignore
 
   post:
-    needs: review
-    if: github.event_name == 'pull_request' && !cancelled() && needs.review.result != 'skipped'
+    needs: reviewer
+    if: '!cancelled() && needs.reviewer.result != ''skipped'''
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -431,6 +460,40 @@ jobs:
           }
           process.exit(failed ? 1 : 0);
           EOF
+
+  review:
+    needs: [lint, integration, reviewer]
+    if: github.event_name != 'push' && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - if: needs.lint.outputs.review == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        continue-on-error: true
+        with:
+          pattern: findings-*
+          path: findings
+
+      - env:
+          EVENT: ${{ github.event_name }}
+          REVIEW: ${{ needs.lint.outputs.review }}
+          INTEGRATION: ${{ needs.integration.result }}
+        run: |
+          if [ "$EVENT" = merge_group ]; then
+            echo "merge queue: reviewed on the pull request"
+            exit 0
+          fi
+          if [ "$REVIEW" != true ]; then
+            echo "no review for this pull request: integration $INTEGRATION"
+            test "$INTEGRATION" = success
+            exit
+          fi
+          failed=0
+          for agent in claude codex; do
+            verdict=$(jq -r .verdict "findings/findings-$agent/findings.json" 2>/dev/null || true)
+            echo "$agent: ${verdict:-no findings}"
+            [ "$verdict" = approved ] || failed=1
+          done
+          exit "$failed"
 
   release:
     needs: lint

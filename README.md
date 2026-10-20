@@ -53,8 +53,9 @@ jobs:
 |---|---|---|---|
 | `lint`: `npm ci`, then `lint` | ✓ | ✓ | ✓ |
 | `deploy`: `deploy` in the `staging` environment, only when the input is set | ✓ | ✓ | |
-| `test` (one per shard) and `integration`, the check to require | ✓ | ✓ | |
-| `context`, `review` (Claude and Codex) and `post` | ✓ | | |
+| `test` (one per shard) and `integration`, a check to require | ✓ | ✓ | |
+| `context`, `reviewer` (Claude and Codex) and `post`, when the pull request [gets a review](#which-pull-requests-get-a-review) | ✓ | | |
+| `review`, the other check to require | ✓ | always green | |
 | `release`: `semantic-release` | | | ✓ |
 
 **Lint** fails the run, and nothing after it starts.
@@ -63,7 +64,7 @@ jobs:
 
 **Integration tests** install Chrome for Testing with `slicc-cdp install-browser --with-deps` (`--version` from the `chrome` input, stable without it), then split the files matching `test-glob` across `shards` jobs by their timings, with [split-tests-by-timings](https://github.com/marketplace/actions/split-tests-by-timings). The timings are the JUnit reports of the latest completed run of the same workflow; without one, the split is by count. Each shard runs the repo's own `test` command unchanged: `harness/shard.cjs`, preloaded through `NODE_OPTIONS`, makes the outermost `node --test` run only the shard's files that its own patterns match, writes `junit/<shard>.xml` next to the usual spec output, and then takes itself out of the environment, so a `node --test` that a test starts runs as it would without it. Each shard uploads `coverage/`, `artifacts/` and `junit/` as `integration-<shard>`. `integration` passes only when every shard did, so it is the one check to require, under the caller's job name (`ci / integration`). A suite whose last step reads every test's artifacts, as this repo's `verify.mjs` does, sets `shards: 1`.
 
-**Review** runs twice, once with [claude-code-action](https://github.com/anthropics/claude-code-action) and once with [codex-action](https://github.com/openai/codex-action), on the same prompt, whether the tests passed or not. Its job token can only read. It gets:
+**Reviewer** runs twice, once with [claude-code-action](https://github.com/anthropics/claude-code-action) and once with [codex-action](https://github.com/openai/codex-action), on the same prompt, whether the tests passed or not. Both run on Amazon Bedrock with the org secret `AWS_BEARER_TOKEN_BEDROCK`, in the region of the org variable `CERT_AWS_REGION` (`us-west-2` without it). Claude uses the model in `CERT_BEDROCK_MODEL` (`global.anthropic.claude-opus-5-5` without it), as the cert reviews do. Codex uses its built-in `amazon-bedrock` provider and the model in `CODEX_BEDROCK_MODEL` (`openai.gpt-5.6-sol` without it). The job token can only read. Each reviewer gets:
 
 - `head/` and `base/`, the pull request's two trees, each after `npm ci`;
 - `review/integration/`, every shard's artifact;
@@ -86,10 +87,25 @@ Each reviewer answers with `findings.json`, held to one JSON schema:
 
 **Release** runs `semantic-release` after lint, without any test: what reached `main` went through the merge queue.
 
+**Review** is the check that stands for the reviews. On a pull request that gets a review it passes when both reviewers' `findings.json` say `approved`. On one that doesn't (a Renovate pull request outside `review-renovate`) it passes when `integration` did. In the merge queue it always passes, since the pull request was reviewed already. Require it next to `ci / integration`, as `ci / review`.
+
+### Which pull requests get a review
+
+Every pull request does, except Renovate's. A Renovate branch is `renovate/<group slug>`, or `renovate/major-<group slug>` for a major, or `renovate/<dependency>-<version>` outside a group. Its pull request gets a review only when the slug, without `major-`, matches one of the globs in `review-renovate`, one per line:
+
+```yaml
+    with:
+      review-renovate: |
+        kernel-and-pnpm
+        coreutils-and-procps
+```
+
+`*` reviews every Renovate pull request. With the default, none, a Renovate pull request is held only by its integration tests.
+
 | Input | Default | |
 |---|---|---|
 | `node-version` | `24` | |
-| `runs-on` | `ubuntu-latest` | every job but `integration`, `context` and `post` |
+| `runs-on` | `ubuntu-latest` | every job but `integration`, `context`, `post` and `review` |
 | `timeout-minutes` | `20` | `lint`, `deploy`, each shard and `release`; a review gets 60 |
 | `lint` | `npm run lint` | |
 | `chrome` | stable | a Chrome for Testing version for `slicc-cdp install-browser` |
@@ -99,11 +115,11 @@ Each reviewer answers with `findings.json`, held to one JSON schema:
 | `deploy` | none | a command that deploys to staging |
 | `review-browser` | `npm run --if-present review:browser` | |
 | `review-prompt` | none | |
+| `review-renovate` | none | globs of Renovate group slugs whose pull requests get a review |
 
 | Secret | Used by |
 |---|---|
-| `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` | the Claude review |
-| `OPENAI_API_KEY` | the Codex review |
+| `AWS_BEARER_TOKEN_BEDROCK` (org secret) | both reviewers |
 | `SLICC_ISSUES_TOKEN` | issues in other repos |
 | anything else | `deploy`, as environment variables |
 
@@ -111,7 +127,7 @@ Coming from `node-ci.yml` and `node-release.yml`, both removed with `.github/act
 
 - The caller workflow above replaces the repo's CI, release and certification workflows.
 - npm trusted publishing names the calling workflow, so `fledgling.workflow` in `package.json` becomes the caller's file name (`ci.yml`), and `npm run trust` registers it again.
-- A ruleset requires `ci / integration`. The merge queue checks the same list, so a required `review / …` status would hold it; leave those required on pull requests only, or not at all.
+- A ruleset requires `ci / integration` and `ci / review`. The `review / claude` and `review / codex` statuses are for reading, not requiring: the merge queue never gets them.
 - `pretest` installs Chrome with `slicc-cdp install-browser`, and `playwright-core` can go.
 
 ## Rules every repo follows
