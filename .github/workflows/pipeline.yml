@@ -201,6 +201,10 @@ jobs:
         run: |
           shard=node_modules/@ai-ecoverse/slicc-shared-web/harness/shard.cjs
           [ -f "$shard" ] || shard=harness/shard.cjs
+          if [ ! -f "$shard" ]; then
+            echo "::error title=Integration tests::No harness/shard.cjs: add @ai-ecoverse/slicc-shared-web as a devDependency, at the version of this workflow or later"
+            exit 1
+          fi
           mkdir -p junit
           SLICC_TEST_FILES=$(tr ' ' '\n' <<< "$FILES")
           SLICC_TEST_ALL=$(node -e 'for (const file of require("node:fs").globSync(process.argv[1])) console.log(file)' "$GLOB")
