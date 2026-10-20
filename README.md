@@ -66,7 +66,7 @@ jobs:
 
 **Reviewer** runs twice, once with [claude-code-action](https://github.com/anthropics/claude-code-action) and once with [codex-action](https://github.com/openai/codex-action), on the same prompt, whether the tests passed or not. Both run on Amazon Bedrock with the org secret `AWS_BEARER_TOKEN_BEDROCK`, in the region of the org variable `CERT_AWS_REGION` (`us-west-2` without it). Claude uses the model in `CERT_BEDROCK_MODEL` (`global.anthropic.claude-opus-5-5` without it), as the cert reviews do. Codex uses its built-in `amazon-bedrock-runtime` provider (codex-action waits for its OpenAI proxy's `<run id>.json` in `codex-home` whenever it has a prompt, so the job writes a placeholder one) and the model in `CODEX_BEDROCK_MODEL` (`global.openai.gpt-6.1-sol` without it). Models that Bedrock serves only through inference profiles, as Sol 6.1 is, need the runtime provider and the profile's `global.` id; the `amazon-bedrock` provider's endpoint doesn't list them. The job token can only read. Each reviewer gets:
 
-- the pull request's head as the working directory and its base in `base/`, each after `npm ci` (claude-code-action needs the working directory to be a checkout);
+- the pull request's head as the working directory and its base in `$RUNNER_TEMP/base`, each after `npm ci` (claude-code-action needs the working directory to be a checkout, and a base nested inside it would break the head's Biome config);
 - `review/integration/`, every shard's artifact;
 - `review/context/`, from the `context` job: the pull request with its comments, reviews and diff, the repo's issues and recent pull requests;
 - `review/browsers.json`: four headless Chrome instances on one machine, `head` and `base` each linked through the extension and through slicc-cli, on CDP ports 9301 to 9304. For each one the job runs `review-browser` (by default `npm run --if-present review:browser`) in that side's tree with `SLICC_REVIEW_SIDE` (`head` or `base`), `SLICC_REVIEW_LINK` (`extension` or `cli`) and `SLICC_REVIEW_CDP`, so the repo loads its own build into that browser;
@@ -91,7 +91,7 @@ Each reviewer answers with `findings.json`, held to one JSON schema:
 
 ### Which pull requests get a review
 
-Every pull request does, except Renovate's. A Renovate branch is `renovate/<group slug>`, or `renovate/major-<group slug>` for a major, or `renovate/<dependency>-<version>` outside a group. Its pull request gets a review only when the slug, without `major-`, matches one of the globs in `review-renovate`, one per line:
+Every pull request does, except Renovate's: one opened by `renovate[bot]` from a `renovate/` branch. A Renovate branch is `renovate/<group slug>`, or `renovate/major-<group slug>` for a major, or `renovate/<dependency>-<version>` outside a group. Its pull request gets a review only when the slug, without `major-`, matches one of the globs in `review-renovate`, one per line:
 
 ```yaml
     with:

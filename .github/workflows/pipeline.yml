@@ -84,14 +84,15 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BRANCH: ${{ github.head_ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
           RENOVATE_GROUPS: ${{ inputs.review-renovate }}
         run: |
           node --input-type=module <<'EOF' | tee -a "$GITHUB_OUTPUT"
           import { matchesGlob } from 'node:path';
-          const { EVENT, BRANCH, RENOVATE_GROUPS } = process.env;
+          const { EVENT, BRANCH, AUTHOR, RENOVATE_GROUPS } = process.env;
           const slug = BRANCH.replace(/^renovate\//, '').replace(/^major-/, '');
           const groups = RENOVATE_GROUPS.split('\n').map((group) => group.trim()).filter(Boolean);
-          const renovate = BRANCH.startsWith('renovate/');
+          const renovate = AUTHOR === 'renovate[bot]' && BRANCH.startsWith('renovate/');
           const review = EVENT === 'pull_request' && (!renovate || groups.some((group) => matchesGlob(slug, group)));
           console.log(`review=${review}`);
           EOF
@@ -280,7 +281,8 @@ jobs:
 
       - run: |
           npm ci
-          (cd base && npm ci)
+          mv base "$RUNNER_TEMP/base"
+          (cd "$RUNNER_TEMP/base" && npm ci)
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -311,7 +313,7 @@ jobs:
                 --user-data-dir="$profile" about:blank > "$profile.log" 2>&1 &
               for _ in $(seq 50); do curl -fs "http://127.0.0.1:$port/json/version" > /dev/null && break; sleep 0.2; done
               tree=$GITHUB_WORKSPACE
-              [ "$side" = head ] || tree=$GITHUB_WORKSPACE/base
+              [ "$side" = head ] || tree=$RUNNER_TEMP/base
               (cd "$tree" && SLICC_REVIEW_SIDE=$side SLICC_REVIEW_LINK=$link \
                 SLICC_REVIEW_CDP="http://127.0.0.1:$port" bash -c "$REVIEW_BROWSER")
               list="$list{\"side\":\"$side\",\"link\":\"$link\",\"cdp\":\"http://127.0.0.1:$port\",\"tree\":\"$tree\"},"
@@ -333,7 +335,7 @@ jobs:
 
           The working directory holds:
           - .: the pull request's head, dependencies installed.
-          - base/: its base, dependencies installed. Leave it out of the review itself; it is there to compare with.
+          - $RUNNER_TEMP/base: its base, dependencies installed, to compare with.
           - review/context/: the pull request (pr.json, pr.diff, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json).
           - review/integration/: the integration tests' coverage, artifacts (screenshots, CPU profiles, crash dumps, console logs) and JUnit reports, one directory per shard.
           - review/browsers.json: four running Chrome instances, reachable over CDP: head and base, each linked through the extension and through slicc-cli. Use them to compare the head's behaviour with the base's.
@@ -362,6 +364,7 @@ jobs:
           allowed_bots: renovate[bot]
           claude_args: >-
             --model ${{ vars.CERT_BEDROCK_MODEL || 'global.anthropic.claude-opus-5-5' }}
+            --add-dir ${{ runner.temp }}/base
             --allowedTools Bash,Read,Glob,Grep,WebFetch
             --json-schema '${{ env.FINDINGS_SCHEMA }}'
 
