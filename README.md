@@ -110,8 +110,8 @@ Every pull request does, except Renovate's: one opened by `renovate[bot]` from a
 | `lint` | `npm run lint` | |
 | `chrome` | stable | a Chrome for Testing version for `slicc-cdp install-browser` |
 | `test` | `npm test` | runs on Xvfb display `:99` when the runner has no `DISPLAY` |
-| `test-glob` | `test/integration/**/*.test.mjs` | the files to split |
-| `shards` | `4` | |
+| `test-glob` | `test/integration/**/*.test.mjs` | the files to split; their paths can't contain spaces |
+| `shards` | `4` | below 1 counts as 1 |
 | `deploy` | none | a command that deploys to staging |
 | `review-browser` | `npm run --if-present review:browser` | |
 | `review-prompt` | none | |

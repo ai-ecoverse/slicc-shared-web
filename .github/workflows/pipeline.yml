@@ -59,6 +59,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       shards: ${{ steps.shards.outputs.shards }}
+      total: ${{ steps.shards.outputs.total }}
       review: ${{ steps.review.outputs.review }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -78,7 +79,10 @@ jobs:
       - id: shards
         env:
           SHARDS: ${{ inputs.shards }}
-        run: echo "shards=$(node -p "JSON.stringify([...Array(Math.max(1, $SHARDS)).keys()])")" >> "$GITHUB_OUTPUT"
+        run: |
+          total=$(( SHARDS > 1 ? SHARDS : 1 ))
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          echo "shards=$(node -p "JSON.stringify([...Array($total).keys()])")" >> "$GITHUB_OUTPUT"
 
       - id: review
         env:
@@ -185,7 +189,7 @@ jobs:
           reports: ${{ runner.temp }}/timings
           glob: ${{ inputs.test-glob }}
           index: ${{ matrix.shard }}
-          total: ${{ inputs.shards }}
+          total: ${{ needs.lint.outputs.total }}
 
       - name: Integration tests
         env:
