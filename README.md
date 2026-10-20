@@ -113,6 +113,7 @@ Every pull request does, except Renovate's: one opened by `renovate[bot]` from a
 | `test-glob` | `test/integration/**/*.test.mjs` | the files to split; their paths can't contain spaces |
 | `shards` | `4` | below 1 counts as 1 |
 | `deploy` | none | a command that deploys to staging |
+| `deploy-secrets` | all | newline- or space-separated secret names (any case) that `deploy` gets |
 | `review-browser` | `npm run --if-present review:browser` | |
 | `review-prompt` | none | |
 | `review-renovate` | none | globs of Renovate group slugs whose pull requests get a review |

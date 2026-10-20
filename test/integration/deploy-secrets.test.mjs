@@ -48,7 +48,7 @@ test('the deploy step exports the caller secrets but none of the pipeline’s ow
 
 test('with deploy-secrets, the deploy step exports only the listed caller secrets', () => {
   assert.equal(
-    exported(` THIRD\nDEPLOY_TOKEN  MISSING github_token\n${declared.join('\n')}\n`),
+    exported(` third\nDEPLOY_TOKEN  MISSING github_token\n${declared.join('\n')}\n`),
     'DEPLOY_TOKEN<<SLICC_EOF\ndeploy\nSLICC_EOF\nTHIRD<<SLICC_EOF\nthird\nSLICC_EOF\n'
   );
 });
