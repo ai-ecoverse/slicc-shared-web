@@ -2033,3 +2033,44 @@ test('the fallback writes no second status for an attempt that already set one',
     'no second status for attempt 1'
   );
 });
+
+for (const [name, setup] of [
+  [
+    'a zero-padded run in a status target_url',
+    () => {
+      writer(566, '.github/workflows/cert-review.yml', 'pull_request_target', 'failure');
+      state.checks.push(
+        statusOf({ state: 'failure', target_url: attemptUrl(566) }),
+        statusOf({
+          state: 'failure',
+          target_url: 'https://github.example/o/r/actions/runs/0566/attempts/1',
+        })
+      );
+    },
+  ],
+  [
+    'a status replaying a run attempt that already wrote a check run',
+    () => {
+      writer(567, '.github/workflows/cert-review.yml', 'pull_request_target', 'failure');
+      state.checks.push(
+        spoofCheck({ external_id: `v2:7:${shas.code}:567:1`, conclusion: 'failure' }),
+        statusOf({ state: 'failure', target_url: attemptUrl(567) })
+      );
+    },
+  ],
+]) {
+  test(`post fails closed on ${name}`, async () => {
+    const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), setup);
+    assert.equal(r.code, 1, r.stdout);
+    assert.equal(check.description, 'another workflow wrote cert-review');
+  });
+}
+
+test('more than ten full pages of statuses is not judged: the writer check fails closed', async () => {
+  const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), () => {
+    for (let i = 0; i < 1000; i++)
+      state.checks.push(statusOf({ context: 'ci', name: 'ci', state: 'success' }));
+  });
+  assert.equal(r.code, 1, r.stdout);
+  assert.equal(check.description, 'incomplete: writer check; re-run');
+});
