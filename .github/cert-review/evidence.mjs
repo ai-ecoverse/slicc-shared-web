@@ -14,6 +14,7 @@ import {
   shownPath,
   summary,
   UNSAFE_NAME,
+  zipNames,
 } from './lib.mjs';
 
 const env = process.env;
@@ -164,7 +165,6 @@ function tidy(dir, root, side, record, artifact) {
       hitCount++;
       if (hits.length < 50) hits.push({ path: `${side}/${shownPath(rel)}`, line, why });
     };
-    if (UNSAFE_NAME.test(rel) || injectionOf(rel).startsWith('fail')) hit(0, 'its name');
     if (IMAGE.test(name) && side !== 'head') {
       record.files++;
       continue;
@@ -196,6 +196,21 @@ function tidy(dir, root, side, record, artifact) {
             kind === 'fail-control' ? 'a bidi or zero-width control' : 'text aimed at the certifier'
           );
       });
+  }
+}
+
+function scanNames(bytes, side, a) {
+  let names;
+  try {
+    names = zipNames(bytes);
+  } catch (err) {
+    stop(`${side} artifact ${a.name} (${a.id}): unreadable zip (${err.message})`);
+  }
+  for (const name of names) {
+    if (!UNSAFE_NAME.test(name) && !injectionOf(name).startsWith('fail')) continue;
+    hitCount++;
+    if (hits.length < 50)
+      hits.push({ path: `${side}/${a.id}/${shownPath(name)}`, line: 0, why: 'its name' });
   }
 }
 
@@ -253,6 +268,7 @@ async function fetchSide(side, run, required) {
     used += bytes.length;
     const zip = join(out, `.${side}-${a.id}.zip`);
     writeFileSync(zip, bytes);
+    scanNames(bytes, side, a);
     const listed = execFileSync('unzip', ['-Zt', zip], { encoding: 'utf8' });
     const size = Number(/([\d]+) bytes uncompressed/.exec(listed)?.[1] ?? Number.POSITIVE_INFINITY);
     if (unpacked + size > budget * 4)

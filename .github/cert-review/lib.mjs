@@ -274,6 +274,37 @@ function chunked(anchor, mark, text) {
 }
 
 export const UNSAFE_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029"\\]/;
+export function zipNames(bytes) {
+  const min = Math.max(0, bytes.length - 65557);
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= min; i--)
+    if (bytes.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  if (eocd < 0) throw new Error('no end of central directory');
+  let count = bytes.readUInt16LE(eocd + 10);
+  let at = bytes.readUInt32LE(eocd + 16);
+  if (count === 0xffff || at === 0xffffffff) {
+    const loc = eocd - 20;
+    if (loc < 0 || bytes.readUInt32LE(loc) !== 0x07064b50) throw new Error('no zip64 locator');
+    const z = Number(bytes.readBigUInt64LE(loc + 8));
+    if (bytes.readUInt32LE(z) !== 0x06064b50) throw new Error('no zip64 end record');
+    count = Number(bytes.readBigUInt64LE(z + 32));
+    at = Number(bytes.readBigUInt64LE(z + 48));
+  }
+  const names = [];
+  for (let n = 0; n < count; n++) {
+    if (bytes.readUInt32LE(at) !== 0x02014b50) throw new Error(`central directory entry ${n}`);
+    const len = bytes.readUInt16LE(at + 28);
+    const extra = bytes.readUInt16LE(at + 30);
+    const comment = bytes.readUInt16LE(at + 32);
+    names.push(bytes.subarray(at + 46, at + 46 + len).toString('utf8'));
+    at += 46 + len + extra + comment;
+  }
+  return names;
+}
+
 export const shownPath = (p) => (UNSAFE_NAME.test(p) ? JSON.stringify(p) : p);
 
 export function annotate(files) {

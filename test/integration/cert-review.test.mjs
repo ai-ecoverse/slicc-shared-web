@@ -14,7 +14,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const cert = join(root, '.github/cert-review');
@@ -2372,4 +2372,37 @@ test('cert-rerun.yml: actions: write only, no checkout of the pull request, not 
     wf,
     /concurrency:\n {6}group: cert-rerun-\$\{\{ github\.event\.pull_request\.number \}\}\n {6}cancel-in-progress: false/
   );
+});
+
+test('evidence-notes (slicc-bios#684): bidi and zero-width controls in a noted file’s content (wasm strings in a tarball diff) are notes; a control in a noted file’s name still fails', async () => {
+  const z = zipOf({
+    'inspect/_ai-ecoverse_wasm-tailscale-1.104.1-9-1.104.1-11.diff':
+      '+main.wasm \u202e\u2066strings\u2069\u202c\n+zero\u200bwidth\n',
+    'inspect/bad\u202ename.diff': 'ok\n',
+  });
+  evidenceState({ headZip: z });
+  const dir = mkdtempSync(join(scratch, 'ev-'));
+  const r = await evidence(dir, { CERT_EVIDENCE_NOTES: 'cert-evidence/inspect/**' });
+  assert.equal(r.code, 0, r.stdout);
+  const m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+  assert.deepEqual(
+    m.injections.notes.map((h) => [h.line, h.why]),
+    [
+      [1, 'a bidi or zero-width control'],
+      [2, 'a bidi or zero-width control'],
+    ]
+  );
+  assert.equal(m.injections.count, 1, 'only the file name counts');
+  assert.deepEqual(
+    m.injections.first.map((h) => [h.line, h.why]),
+    [[0, 'its name']]
+  );
+});
+
+test('zipNames reads entry names from the zip’s central directory as UTF-8, so a control in a name is seen whatever unzip’s locale does to it', async () => {
+  const { zipNames } = await import(pathToFileURL(join(cert, 'lib.mjs')).href);
+  const names = zipNames(zipOf({ 'inspect/bad\u202ename.diff': 'ok\n', 'log.txt': 'x\n' }));
+  assert.ok(names.includes('inspect/bad\u202ename.diff'), names.join(', '));
+  assert.ok(names.includes('log.txt'));
+  assert.throws(() => zipNames(Buffer.from('not a zip')), /no end of central directory/);
 });
