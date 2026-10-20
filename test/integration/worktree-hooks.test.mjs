@@ -141,3 +141,28 @@ test("a commit in worktree A runs A's hooks after B installs, and still does onc
   ranWith(commit(main, 'main after b deleted'), main, [a, b]);
   assert.equal(ok(a, 'log', '-1', '--format=%s'), 'a after b deleted');
 });
+
+test('in worktrees of a bare repo, each commit runs its own hooks, and the repo stays bare', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'slicc-worktree-hooks-bare-')));
+  dirs.push(base);
+  const { main } = fixture();
+  const bare = join(base, 'repo.git');
+  ok(base, 'clone', '-q', '--bare', main, bare);
+  const a = join(base, 'a');
+  const b = join(base, 'b');
+  ok(bare, 'worktree', 'add', '-q', '-b', 'bare-a', a);
+  ok(bare, 'worktree', 'add', '-q', '-b', 'bare-b', b);
+  for (const dir of [a, b]) modules(dir);
+  install(a);
+  install(b);
+  install(b);
+
+  assert.equal(ok(bare, 'rev-parse', '--is-bare-repository'), 'true');
+  for (const dir of [a, b]) assert.equal(ok(dir, 'rev-parse', '--is-bare-repository'), 'false');
+  ranWith(commit(a, 'a after b installed'), a, [b]);
+  ranWith(commit(b, 'b'), b, [a]);
+
+  ok(bare, 'worktree', 'remove', '--force', b);
+  ranWith(commit(a, 'a after b deleted'), a, [b]);
+  assert.equal(ok(bare, 'rev-parse', '--is-bare-repository'), 'true');
+});
