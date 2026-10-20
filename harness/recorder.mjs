@@ -215,6 +215,12 @@ export function commands({ type, url }, { coverage = ['/'], exits = new Map(), p
   return list;
 }
 
+function destination(run, target, early) {
+  if (!run) return target && early;
+  const same = run.context === undefined || target?.browserContextId === run.context;
+  return same && target && run.console;
+}
+
 export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), profiling } = {}) {
   const collecting = coverage.length > 0;
   const watching = collecting || Boolean(profiling);
@@ -277,7 +283,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
 
   function log(sessionId, line) {
     const target = sessions.get(sessionId);
-    const into = run ? target?.browserContextId === run.context && run.console : target && early;
+    const into = destination(run, target, early);
     if (into) into.push(`${label(target)}: ${line}`);
   }
 
