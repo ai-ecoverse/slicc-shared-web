@@ -8,37 +8,48 @@ const workflows = ['release.yml', 'pipeline.yml', 'node-release.yml']
   .map((name) => `.github/workflows/${name}`)
   .filter((path) => existsSync(`${root}/${path}`));
 
-function releaseGroups(path) {
+function releaseConcurrency(path) {
   const lines = readFileSync(`${root}/${path}`, 'utf8').split('\n');
-  const groups = [];
+  const blocks = [];
   lines.forEach((line, i) => {
-    const match = /^\s*group:\s*(.+?)\s*$/.exec(line);
-    if (match && /^\s*concurrency:\s*$/.test(lines[i - 1] ?? '') && /release/.test(match[1])) {
-      groups.push(match[1]);
+    const group = /^\s*group:\s*(.+?)\s*$/.exec(line);
+    if (group && /^\s*concurrency:\s*$/.test(lines[i - 1] ?? '') && /release/.test(group[1])) {
+      const cancel = /^\s*cancel-in-progress:\s*(\S+)\s*$/.exec(lines[i + 1] ?? '');
+      blocks.push({ group: group[1], cancel: cancel?.[1] });
     }
   });
-  return groups;
+  return blocks;
 }
 
 function render(group, ref) {
+  const context = {
+    'github.ref': `refs/heads/${ref}`,
+    'github.ref_name': ref,
+    'github.repository': 'ai-ecoverse/consumer',
+  };
   return group.replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_, expr) => {
-    const value = { 'github.ref': ref, 'github.repository': 'ai-ecoverse/consumer' }[expr];
-    assert.ok(value, `unexpected expression ${expr} in ${group}`);
-    return value;
+    assert.ok(context[expr], `unexpected expression ${expr} in ${group}`);
+    return context[expr];
   });
 }
 
 test('release workflows are found', () => {
   assert.ok(workflows.length >= 2, workflows.join(','));
-  for (const path of workflows) assert.ok(releaseGroups(path).length > 0, path);
+  for (const path of workflows) assert.ok(releaseConcurrency(path).length > 0, path);
 });
 
-test('release concurrency groups are per ref so main and 1.x never cancel each other', () => {
+test('release concurrency groups are per branch so main and 1.x never cancel each other', () => {
   for (const path of workflows) {
-    for (const group of releaseGroups(path)) {
-      const main = render(group, 'refs/heads/main');
-      const maintenance = render(group, 'refs/heads/1.x');
-      assert.notEqual(main, maintenance, `${path}: ${group}`);
+    for (const { group } of releaseConcurrency(path)) {
+      assert.notEqual(render(group, 'main'), render(group, '1.x'), `${path}: ${group}`);
+    }
+  }
+});
+
+test('a release in progress is never cancelled', () => {
+  for (const path of workflows) {
+    for (const { group, cancel } of releaseConcurrency(path)) {
+      assert.equal(cancel, 'false', `${path}: ${group}`);
     }
   }
 });
