@@ -17,8 +17,7 @@ const script = `
 const { launch } = await import(process.env.HARNESS);
 const chrome = await launch({ roots: [['/', 'test/integration/page/']] });
 console.log(JSON.stringify({ pid: chrome.pid, profile: chrome.profile }));
-if (process.env.END === 'exit') process.exit(3);
-setInterval(() => {}, 60000);
+process.stdin.once('data', () => process.exit(3));
 `;
 
 function alive(pid) {
@@ -44,8 +43,8 @@ async function orphan(end) {
   const dir = await mkdtemp(join(tmpdir(), 'slicc-exit-'));
   dirs.push(dir);
   const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
-    env: { ...process.env, HARNESS: harness, END: end, TMPDIR: dir },
-    stdio: ['ignore', 'pipe', 'inherit'],
+    env: { ...process.env, HARNESS: harness, TMPDIR: dir },
+    stdio: ['pipe', 'pipe', 'inherit'],
   });
   const exited = new Promise((resolve) => {
     child.once('exit', (code, signal) => resolve({ code, signal }));
@@ -57,7 +56,8 @@ async function orphan(end) {
   const { pid, profile } = JSON.parse(line);
   assert.ok(alive(pid), 'chrome runs');
   assert.ok(existsSync(profile), 'profile exists');
-  if (end !== 'exit') child.kill(end);
+  if (end === 'exit') child.stdin.write('\n');
+  else child.kill(end);
   return { dir, pid, profile, exit: await exited };
 }
 
