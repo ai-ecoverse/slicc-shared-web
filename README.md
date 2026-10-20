@@ -43,11 +43,17 @@ permissions:
   statuses: write
   id-token: write
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   ci:
     uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@vX.Y.Z
     secrets: inherit
 ```
+
+The caller cancels superseded runs on pull requests only, so a push to `main` never cancels a release partway through.
 
 | Job | Pull request | Merge queue | `main` |
 |---|---|---|---|

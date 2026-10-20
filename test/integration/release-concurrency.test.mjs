@@ -53,3 +53,29 @@ test('a release in progress is never cancelled', () => {
     }
   }
 });
+
+function callerCancel(text) {
+  if (!/uses:\s*\S*\.github\/workflows\/pipeline\.yml/.test(text)) return [];
+  const match = /^concurrency:\n {2}group:.*\n {2}cancel-in-progress:\s*(.+?)\s*$/m.exec(text);
+  return [match ? match[1] : 'false'];
+}
+
+function cancelsOn(cancel, event) {
+  if (cancel === 'true' || cancel === 'false') return cancel === 'true';
+  const expr = /^\$\{\{\s*github\.event_name\s*==\s*'([a-z_]+)'\s*\}\}$/.exec(cancel);
+  assert.ok(expr, `unexpected cancel-in-progress ${cancel}`);
+  return expr[1] === event;
+}
+
+test('a pipeline.yml caller never cancels a push to main, only superseded pull requests', () => {
+  const ci = readFileSync(`${root}/.github/workflows/ci.yml`, 'utf8');
+  const readme = readFileSync(`${root}/README.md`, 'utf8');
+  const snippets = [...readme.matchAll(/```yaml\n([\s\S]*?)```/g)].map((m) => m[1]);
+  const callers = [ci, ...snippets].flatMap(callerCancel);
+  assert.ok(callers.length >= 2, String(callers.length));
+  for (const cancel of callers) {
+    assert.equal(cancelsOn(cancel, 'push'), false, cancel);
+    assert.equal(cancelsOn(cancel, 'merge_group'), false, cancel);
+    assert.equal(cancelsOn(cancel, 'pull_request'), true, cancel);
+  }
+});
