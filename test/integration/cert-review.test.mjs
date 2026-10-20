@@ -2250,13 +2250,27 @@ test('cert-rerun: marking ready or the approval label re-runs every job of the n
   });
   assert.equal(label.code, 0, label.stdout);
   assert.deepEqual(state.reruns, [12, 12]);
+  const removed = await run('rerun.mjs', {
+    GITHUB_EVENT_PATH: rerunEvent(
+      'rr-unlabel',
+      'unlabeled',
+      {},
+      { label: { name: 'cert-review-approved' } }
+    ),
+  });
+  assert.equal(removed.code, 0, removed.stdout);
+  assert.deepEqual(
+    state.reruns,
+    [12, 12, 12],
+    'removing the approval re-runs too, so the guard fails the head again'
+  );
   state.workflowRuns.push(certRun(13, { status: 'in_progress' }));
   const busy = await run('rerun.mjs', {
     GITHUB_EVENT_PATH: rerunEvent('rr-busy', 'ready_for_review'),
   });
   assert.equal(busy.code, 0, busy.stdout);
   assert.deepEqual(state.cancels, [13]);
-  assert.deepEqual(state.reruns, [12, 12, 13]);
+  assert.deepEqual(state.reruns, [12, 12, 12, 13]);
   state.workflowRuns.push(certRun(14, { pull_requests: [{ number: 9 }] }));
   state.rerunBusy = true;
   const raced = await run('rerun.mjs', {
@@ -2309,6 +2323,13 @@ test('cert-rerun: a fork, a draft, another label or another action is a no-op; n
     ],
     ['rr-sync', 'synchronize', {}, {}, /noop \(action synchronize\)/],
     [
+      'rr-unother',
+      'unlabeled',
+      {},
+      { label: { name: 'documentation' } },
+      /noop \(label documentation\)/,
+    ],
+    [
       'rr-title',
       'edited',
       {},
@@ -2342,7 +2363,10 @@ test('cert-rerun.yml: actions: write only, no checkout of the pull request, not 
     wf,
     /github\.event\.pull_request\.head\.repo\.full_name == github\.repository && !github\.event\.pull_request\.draft/
   );
-  assert.match(wf, /github\.event\.label\.name == inputs\.approval-label/);
+  assert.match(
+    wf,
+    /\(\(github\.event\.action == 'labeled' \|\| github\.event\.action == 'unlabeled'\) && github\.event\.label\.name == inputs\.approval-label\)/
+  );
   assert.match(wf, /github\.event\.action == 'edited' && github\.event\.changes\.base/);
   assert.match(
     wf,

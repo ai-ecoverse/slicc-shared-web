@@ -8,7 +8,7 @@ on:
         type: string
         required: true
       approval-label:
-        description: The coordinator's approval label whose adding re-runs cert-review
+        description: The coordinator's approval label whose adding or removal re-runs cert-review
         type: string
         default: cert-review-approved
       workflow:
@@ -21,7 +21,7 @@ permissions: {}
 jobs:
   rerun:
     name: re-run cert-review
-    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && (github.event.action == 'ready_for_review' || (github.event.action == 'labeled' && github.event.label.name == inputs.approval-label) || (github.event.action == 'edited' && github.event.changes.base))
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && (github.event.action == 'ready_for_review' || ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name == inputs.approval-label) || (github.event.action == 'edited' && github.event.changes.base))
     runs-on: ubuntu-latest
     timeout-minutes: 8
     concurrency:

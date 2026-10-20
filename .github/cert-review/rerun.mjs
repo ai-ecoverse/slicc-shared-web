@@ -11,7 +11,7 @@ if (env.GITHUB_EVENT_NAME !== 'pull_request_target') {
   say(`noop (event ${env.GITHUB_EVENT_NAME})`);
   process.exit(0);
 }
-if (event.action === 'labeled' && event.label?.name !== env.APPROVAL) {
+if (['labeled', 'unlabeled'].includes(event.action) && event.label?.name !== env.APPROVAL) {
   say(`noop (label ${event.label?.name ?? ''})`);
   process.exit(0);
 }
@@ -19,7 +19,7 @@ if (event.action === 'edited' && !event.changes?.base) {
   say('noop (edited, not the base)');
   process.exit(0);
 }
-if (!['labeled', 'ready_for_review', 'edited'].includes(event.action)) {
+if (!['labeled', 'unlabeled', 'ready_for_review', 'edited'].includes(event.action)) {
   say(`noop (action ${event.action})`);
   process.exit(0);
 }
