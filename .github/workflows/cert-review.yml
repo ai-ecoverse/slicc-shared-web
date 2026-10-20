@@ -53,6 +53,10 @@ on:
         description: Names (globs) of that workflow's artifacts to fetch, bound by id and digest
         type: string
         default: ''
+      evidence-notes:
+        description: Globs (artifact name / path inside it) whose text is upstream data, such as a dependency tarball's diff; an injection-shaped line there is a suspect note for the review, not a failure. Read from main's caller. Names and controls in file names still fail
+        type: string
+        default: ''
       evidence-wait-minutes:
         description: How long the evidence job waits for the head's run to finish (at most 200; the job times out at 240)
         type: number
@@ -261,6 +265,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CERT_EVIDENCE_WORKFLOW: ${{ inputs.evidence-workflow }}
           CERT_EVIDENCE_ARTIFACTS: ${{ inputs.evidence-artifacts }}
+          CERT_EVIDENCE_NOTES: ${{ inputs.evidence-notes }}
           CERT_EVIDENCE_WAIT: ${{ inputs.evidence-wait-minutes }}
           CERT_EVIDENCE_MAX_MB: ${{ inputs.evidence-max-mb }}
           CERT_EVIDENCE_DIR: ${{ runner.temp }}/evidence

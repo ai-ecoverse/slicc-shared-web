@@ -133,15 +133,17 @@ async function artifactsOf(run) {
 const IMAGE = /\.(?:png|jpe?g|gif|webp)$/i;
 const hits = [];
 let hitCount = 0;
+const notes = [];
+const noteGlobs = globs(env.CERT_EVIDENCE_NOTES ?? '');
 let unpacked = 0;
 
-function tidy(dir, root, side, record) {
+function tidy(dir, root, side, record, artifact) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
     const rel = p.slice(root.length + 1);
     const s = lstatSync(p);
     if (s.isDirectory()) {
-      tidy(p, root, side, record);
+      tidy(p, root, side, record, artifact);
       continue;
     }
     if (!s.isFile()) {
@@ -152,7 +154,13 @@ function tidy(dir, root, side, record) {
     unpacked += s.size;
     if (unpacked > budget * 4)
       stop(`the evidence unpacks to more than ${(budget * 4) / 1048576} MB`);
+    const inner = rel.slice(rel.indexOf('/') + 1);
+    const noted = artifact && matchesAny(`${artifact}/${inner}`, noteGlobs);
     const hit = (line, why) => {
+      if (noted && line > 0) {
+        if (notes.length < 50) notes.push({ path: `${side}/${shownPath(rel)}`, line, why });
+        return;
+      }
       hitCount++;
       if (hits.length < 50) hits.push({ path: `${side}/${shownPath(rel)}`, line, why });
     };
@@ -267,7 +275,7 @@ async function fetchSide(side, run, required) {
     );
     rmSync(zip, { force: true });
     const before = record.files;
-    tidy(dest, dir, side, record);
+    tidy(dest, dir, side, record, a.name);
     record.artifacts.push({
       name: a.name,
       id: a.id,
@@ -294,7 +302,7 @@ const manifest = {
     ? await fetchSide('base', b, false)
     : { none: `no finished push run of ${file} on ${pull.base.ref} at or behind the base` },
 };
-manifest.injections = { count: hitCount, first: hits };
+manifest.injections = { count: hitCount, first: hits, notes };
 writeFileSync(join(out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 const line = `cert-review evidence: PASS head run ${h.id} (${h.conclusion}, ${manifest.head.artifacts.length} artifacts), base ${b ? `run ${b.id} at ${b.head_sha.slice(0, 12)} (${b.conclusion}, ${manifest.base.artifacts.length} artifacts)` : 'none'}`;
 console.log(line);
