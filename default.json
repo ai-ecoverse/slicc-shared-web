@@ -77,6 +77,12 @@
       "respectLatest": true
     },
     {
+      "description": "Never offer a major of slicc-shared-web itself, as the npm package or as the ai-ecoverse/slicc-shared-web reusable workflow ref: the 2.x line drops node-ci.yml and changes the shared tooling, so a repo moves to the next major by hand. Minors and patches within the repo's current major still update and automerge.",
+      "matchPackageNames": ["@ai-ecoverse/slicc-shared-web", "ai-ecoverse/slicc-shared-web"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
       "description": "fnox-build publishes @ai-ecoverse/fnox and its platform packages only as <upstream fnox version>-slicc.<build> prereleases, with latest pointing at the newest; take only the -slicc.N ones.",
       "matchPackageNames": ["@ai-ecoverse/fnox", "@ai-ecoverse/fnox-*"],
       "allowedVersions": "/-slicc\\.\\d+$/"
