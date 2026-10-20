@@ -11,12 +11,16 @@ const step = workflow.match(
   /- name: Secrets as environment variables\n[\s\S]*?<<'EOF'\n([\s\S]*?)\n {10}EOF\n/
 )[1];
 const script = step.replace(/^ {10}/gm, '');
+const declared = [
+  ...workflow.match(/\n {4}secrets:\n((?: {6}.*\n)+)/)[1].matchAll(/^ {6}(\w+):$/gm),
+].map((match) => match[1]);
 
 test('the deploy step exports the caller secrets but none of the pipeline’s own', () => {
+  for (const name of ['AWS_BEARER_TOKEN_BEDROCK', 'SLICC_ISSUES_TOKEN'])
+    assert.ok(declared.includes(name), name);
   const secrets = {
     github_token: 'gh',
-    AWS_BEARER_TOKEN_BEDROCK: 'bedrock',
-    SLICC_ISSUES_TOKEN: 'issues',
+    ...Object.fromEntries(declared.map((name) => [name, name.toLowerCase()])),
     DEPLOY_TOKEN: 'deploy',
     OTHER: 'multi\nline',
   };
