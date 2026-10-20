@@ -90,26 +90,49 @@ function commit(dir, line) {
   return git(dir, ['commit', '-m', line], { LEFTHOOK_VERBOSE: '1' });
 }
 
+const oldInstaller = [
+  '#!/bin/sh',
+  'set -eu',
+  'git rev-parse --git-dir >/dev/null 2>&1 || exit 0',
+  'common="$(git rev-parse --path-format=absolute --git-common-dir)"',
+  'for key in core.bare core.worktree; do',
+  '  if value=$(git config --file "$common/config" --get "$key"); then',
+  '    git config --file "$common/config.worktree" --get "$key" >/dev/null || git config --file "$common/config.worktree" "$key" "$value"',
+  '    git config --file "$common/config" --unset "$key"',
+  '  fi',
+  'done',
+  'hooks="$(git rev-parse --absolute-git-dir)/worktree-hooks"',
+  'git config extensions.worktreeConfig true',
+  'git config --worktree core.hooksPath "$hooks"',
+  'exec lefthook install "$@"',
+  '',
+].join('\n');
+
+const config =
+  'assert_lefthook_installed: true\npre-commit:\n  jobs:\n    - name: marker\n      run: echo worktree-hook-ran\n';
+
+function repoWithShims(main) {
+  mkdirSync(main);
+  writeFileSync(join(main, '.gitignore'), 'node_modules/\n');
+  writeFileSync(join(main, 'lefthook.yml'), config);
+  writeFileSync(join(main, 'README.md'), '# fixture\n');
+  ok(main, 'init', '-q');
+  modules(main);
+  install(main);
+  ok(main, 'add', '-A');
+  ok(main, 'commit', '-qm', 'init', '--no-verify');
+}
+
 function fixture() {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'slicc-worktree-hooks-')));
   dirs.push(base);
   const main = join(base, 'main');
-  mkdirSync(main);
-  writeFileSync(join(main, '.gitignore'), 'node_modules/\n');
-  writeFileSync(
-    join(main, 'lefthook.yml'),
-    'assert_lefthook_installed: true\npre-commit:\n  jobs:\n    - name: marker\n      run: echo worktree-hook-ran\n'
-  );
-  writeFileSync(join(main, 'README.md'), '# fixture\n');
-  ok(main, 'init', '-q');
-  ok(main, 'add', '-A');
-  ok(main, 'commit', '-qm', 'init', '--no-verify');
+  repoWithShims(main);
   const a = join(base, 'a');
   const b = join(base, 'b');
   ok(main, 'worktree', 'add', '-q', '-b', 'a', a);
   ok(main, 'worktree', 'add', '-q', '-b', 'b', b);
-  for (const dir of [main, a, b]) modules(dir);
-  return { main, a, b };
+  return { base, main, a, b };
 }
 
 function ranWith(run, own, others) {
@@ -121,45 +144,61 @@ function ranWith(run, own, others) {
   }
 }
 
+function refused(run, dir, before) {
+  assert.notEqual(run.status, 0, run.output);
+  assert.match(run.output, /pre-commit: run npm install/);
+  assert.equal(ok(dir, 'log', '-1', '--format=%s'), before);
+}
+
 function untouched(dir, bare = 'false') {
   const common = ok(dir, 'rev-parse', '--path-format=absolute', '--git-common-dir');
   assert.equal(git(dir, ['config', '--get', 'extensions.worktreeConfig']).status, 1);
   assert.equal(ok(dir, 'config', '--file', join(common, 'config'), 'core.bare'), bare);
-  assert.equal(ok(dir, 'config', '--get-all', 'core.hooksPath'), 'node_modules/.git-hooks');
   assert.equal(
     ok(dir, 'config', '--show-scope', '--get-all', 'core.hooksPath'),
-    'local\tnode_modules/.git-hooks'
+    'local\t.githooks'
   );
-  const configs = [common, ...ok(dir, 'worktree', 'list', '--porcelain').split('\n')]
-    .filter((line) => line.startsWith('worktree ') || line === common)
-    .map((line) => line.replace(/^worktree /, ''));
-  for (const top of configs) {
-    if (!existsSync(top)) continue;
+  const tops = ok(dir, 'worktree', 'list', '--porcelain')
+    .split('\n')
+    .filter((line) => line.startsWith('worktree '))
+    .map((line) => line.slice('worktree '.length));
+  for (const top of tops.filter((t) => existsSync(t) && t !== common)) {
     const gitDir = ok(top, 'rev-parse', '--path-format=absolute', '--git-dir');
     assert.equal(existsSync(join(gitDir, 'config.worktree')), false, gitDir);
     assert.equal(existsSync(join(gitDir, 'worktree-hooks')), false, gitDir);
   }
+  assert.equal(existsSync(join(common, 'config.worktree')), false);
   assert.equal(existsSync(join(common, 'hooks', 'pre-commit')), false);
 }
 
-test('each worktree runs its own hooks from a shared relative core.hooksPath, also after another one is deleted', () => {
-  const { main, a, b } = fixture();
-  install(main);
-  install(a);
-  install(a);
-  install(b);
+test('the installer writes a committed .githooks shim that runs the worktree own lefthook hook', () => {
+  const { main } = fixture();
+  const shim = join(main, '.githooks', 'pre-commit');
+  assert.equal(readFileSync(shim, 'utf8').split('\n')[0], '#!/bin/sh');
+  assert.ok(existsSync(join(main, 'node_modules', '.git-hooks', 'pre-commit')));
+  assert.equal(ok(main, 'ls-files', '.githooks'), '.githooks/pre-commit');
+  assert.equal(ok(main, 'ls-files', '-s', '.githooks/pre-commit').split(' ')[0], '100755');
+  ranWith(commit(main, 'main'), main, []);
   untouched(main);
+});
 
+test('a fresh worktree without npm install fails the commit with run npm install, then runs its own hooks once installed, also after another one is deleted', () => {
+  const { main, a, b } = fixture();
+  refused(commit(a, 'a before install'), a, 'init');
+  refused(commit(b, 'b before install'), b, 'init');
+
+  modules(a);
+  install(a);
+  install(a);
+  modules(b);
+  install(b);
+  for (const dir of [a, b]) assert.equal(ok(dir, 'status', '--porcelain', '.githooks'), '');
   ranWith(commit(a, 'a after b installed'), a, [b, main]);
   ranWith(commit(main, 'main after b installed'), main, [a, b]);
   ranWith(commit(b, 'b'), b, [a, main]);
   for (const dir of [main, a, b]) {
-    assert.ok(existsSync(join(dir, 'node_modules', '.git-hooks', 'pre-commit')), dir);
-    assert.ok(
-      readFileSync(join(dir, 'node_modules', '.git-hooks', 'pre-commit'), 'utf8').includes(
-        join(dir, 'node_modules')
-      )
-    );
+    const hook = readFileSync(join(dir, 'node_modules', '.git-hooks', 'pre-commit'), 'utf8');
+    assert.ok(hook.includes(join(dir, 'node_modules')), dir);
   }
 
   ok(main, 'worktree', 'remove', '--force', b);
@@ -175,12 +214,15 @@ test('each worktree runs its own hooks from a shared relative core.hooksPath, al
     main,
   ]);
   assert.equal(ok(a, 'log', '-1', '--format=%s'), 'from sub');
+
+  rmSync(join(a, 'node_modules'), { recursive: true, force: true });
+  refused(commit(a, 'a without node_modules'), a, 'from sub');
   untouched(a);
 });
 
 test('a moved worktree keeps running its own hooks', () => {
   const { main, a } = fixture();
-  install(main);
+  modules(a);
   install(a);
   const moved = `${a}-moved`;
   ok(main, 'worktree', 'move', a, moved);
@@ -192,9 +234,33 @@ test('a moved worktree keeps running its own hooks', () => {
   untouched(moved);
 });
 
-test('lefthook postinstall writes no shared hook once core.hooksPath is relative', () => {
-  const { main, a } = fixture();
+test('an existing shim is never overwritten, and every configured hook gets one', () => {
+  const { main } = fixture();
+  const shim = join(main, '.githooks', 'pre-commit');
+  const custom = '#!/bin/sh\necho custom-shim\nexit 0\n';
+  writeFileSync(shim, custom);
+  writeFileSync(
+    join(main, 'lefthook.yml'),
+    `${config}pre-push:\n  jobs:\n    - run: echo push\ncommit-msg:\n  jobs:\n    - run: echo msg\n`
+  );
   install(main);
+  assert.equal(readFileSync(shim, 'utf8'), custom);
+  assert.deepEqual(readdirSync(join(main, '.githooks')).sort(), [
+    'commit-msg',
+    'pre-commit',
+    'pre-push',
+  ]);
+  assert.equal(
+    readFileSync(join(main, '.githooks', 'pre-push'), 'utf8'),
+    readFileSync(join(main, '.githooks', 'commit-msg'), 'utf8')
+  );
+  assert.ok(existsSync(join(main, 'node_modules', '.git-hooks', 'pre-push')));
+});
+
+test('lefthook postinstall writes no hook anywhere once core.hooksPath is set', () => {
+  const { main, a } = fixture();
+  modules(a);
+  const shim = readFileSync(join(main, '.githooks', 'pre-commit'), 'utf8');
   const run = spawnSync(process.execPath, [join(a, 'node_modules', 'lefthook', 'postinstall.js')], {
     cwd: a,
     encoding: 'utf8',
@@ -202,21 +268,22 @@ test('lefthook postinstall writes no shared hook once core.hooksPath is relative
   });
   assert.equal(run.status, 0, run.stdout + run.stderr);
   assert.equal(existsSync(join(a, 'node_modules', '.git-hooks')), false);
+  assert.equal(readFileSync(join(a, '.githooks', 'pre-commit'), 'utf8'), shim);
   untouched(a);
 });
 
 test('in worktrees of a bare repo, each commit runs its own hooks, and the repo stays bare', () => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'slicc-worktree-hooks-bare-')));
-  dirs.push(base);
-  const { main } = fixture();
+  const { base, main } = fixture();
   const bare = join(base, 'repo.git');
   ok(base, 'clone', '-q', '--bare', main, bare);
-  const a = join(base, 'a');
-  const b = join(base, 'b');
+  const a = join(base, 'bare-a');
+  const b = join(base, 'bare-b');
   ok(bare, 'worktree', 'add', '-q', '-b', 'bare-a', a);
   ok(bare, 'worktree', 'add', '-q', '-b', 'bare-b', b);
-  for (const dir of [a, b]) modules(dir);
+  modules(a);
   install(a);
+  refused(commit(b, 'b before install'), b, 'init');
+  modules(b);
   install(b);
   install(b);
 
@@ -232,31 +299,26 @@ test('in worktrees of a bare repo, each commit runs its own hooks, and the repo 
 });
 
 test('a worktree set up by the old per-worktree installer drops its absolute core.hooksPath and runs its own hooks', () => {
-  const { main, a, b } = fixture();
-  const old = join(dirname(main), 'old-install-hooks.sh');
-  writeFileSync(
-    old,
-    [
-      '#!/bin/sh',
-      'set -eu',
-      'git rev-parse --git-dir >/dev/null 2>&1 || exit 0',
-      'common="$(git rev-parse --path-format=absolute --git-common-dir)"',
-      'for key in core.bare core.worktree; do',
-      '  if value=$(git config --file "$common/config" --get "$key"); then',
-      '    git config --file "$common/config.worktree" --get "$key" >/dev/null || git config --file "$common/config.worktree" "$key" "$value"',
-      '    git config --file "$common/config" --unset "$key"',
-      '  fi',
-      'done',
-      'hooks="$(git rev-parse --absolute-git-dir)/worktree-hooks"',
-      'git config extensions.worktreeConfig true',
-      'git config --worktree core.hooksPath "$hooks"',
-      'exec lefthook install "$@"',
-      '',
-    ].join('\n')
-  );
-  install(main, old);
-  install(a, old);
-  install(b, old);
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'slicc-worktree-hooks-old-')));
+  dirs.push(base);
+  const old = join(base, 'old-install-hooks.sh');
+  writeFileSync(old, oldInstaller);
+  const main = join(base, 'main');
+  mkdirSync(main);
+  writeFileSync(join(main, '.gitignore'), 'node_modules/\n');
+  writeFileSync(join(main, 'lefthook.yml'), config);
+  writeFileSync(join(main, 'README.md'), '# fixture\n');
+  ok(main, 'init', '-q');
+  ok(main, 'add', '-A');
+  ok(main, 'commit', '-qm', 'init', '--no-verify');
+  const a = join(base, 'a');
+  const b = join(base, 'b');
+  ok(main, 'worktree', 'add', '-q', '-b', 'a', a);
+  ok(main, 'worktree', 'add', '-q', '-b', 'b', b);
+  for (const dir of [main, a, b]) {
+    modules(dir);
+    install(dir, old);
+  }
   assert.match(ok(a, 'config', '--worktree', 'core.hooksPath'), /worktree-hooks$/);
 
   install(a);
@@ -267,10 +329,15 @@ test('a worktree set up by the old per-worktree installer drops its absolute cor
       .status,
     1
   );
-  assert.equal(ok(a, 'config', '--get-all', 'core.hooksPath'), 'node_modules/.git-hooks');
+  assert.equal(ok(a, 'config', '--get-all', 'core.hooksPath'), '.githooks');
   assert.equal(ok(a, 'config', 'extensions.worktreeConfig'), 'true');
+  assert.equal(
+    ok(main, 'config', '--file', join(main, '.git', 'config.worktree'), 'core.bare'),
+    'false'
+  );
   ranWith(commit(a, 'a after migration'), a, [b, main]);
   ranWith(commit(b, 'b still on its old hooks'), b, [a, main]);
+  ranWith(commit(main, 'main still on its old hooks'), main, [a, b]);
 });
 
 test('outside a git checkout it does nothing and exits 0', () => {
@@ -282,15 +349,15 @@ test('outside a git checkout it does nothing and exits 0', () => {
   assert.deepEqual(readdirSync(dir), []);
 });
 
-test('a package in a subdirectory gets its hooks in its own node_modules', () => {
+test('a package in a subdirectory gets its shims and hooks under its own directory', () => {
   const { main, a } = fixture();
   const pkg = join(main, 'pkg');
   mkdirSync(pkg);
   modules(pkg);
   install(pkg);
-  assert.equal(ok(main, 'config', 'core.hooksPath'), 'pkg/node_modules/.git-hooks');
+  assert.equal(ok(main, 'config', 'core.hooksPath'), 'pkg/.githooks');
+  assert.ok(existsSync(join(pkg, '.githooks', 'pre-commit')));
   assert.ok(existsSync(join(pkg, 'node_modules', '.git-hooks', 'pre-commit')));
-  assert.equal(existsSync(join(main, 'node_modules', '.git-hooks')), false);
   ranWith(commit(main, 'from the root'), pkg, [a]);
   assert.equal(git(main, ['config', '--get', 'extensions.worktreeConfig']).status, 1);
 });
