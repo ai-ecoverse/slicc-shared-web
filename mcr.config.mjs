@@ -6,11 +6,12 @@ import { inSources, unitSources } from './unit/sources.mjs';
 
 if (process.env.SLICC_UNIT_TESTS !== undefined) process.env.NODE_OPTIONS = inject();
 
-const strip = (entry) => {
-  if (entry.url.endsWith('.ts')) entry.source = stripTypeScriptTypes(entry.source);
-};
+const code = /\.(m|c)?(j|t)s$/;
+const typed = /\.(m|c)?ts$/;
 
-const code = /\.(m?js|ts)$/;
+const strip = (entry) => {
+  if (typed.test(entry.url)) entry.source = stripTypeScriptTypes(entry.source);
+};
 
 const listed = unitSources();
 

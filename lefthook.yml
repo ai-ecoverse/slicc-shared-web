@@ -14,5 +14,5 @@ pre-commit:
     - name: AGENTS.md
       run: npx --no-install slicc-agents-md
     - name: diff coverage
-      glob: "*.{js,mjs,cjs,ts}"
+      glob: "*.{js,mjs,cjs,ts,mts,cts,jsx,tsx}"
       run: npx --no-install slicc-unit-cover

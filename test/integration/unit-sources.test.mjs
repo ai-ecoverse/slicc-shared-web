@@ -107,7 +107,16 @@ test('unitSources: the default is src only; a list in package.json slicc.unitSou
   assert.equal(inSources('scripts/c.mjs', custom.dir), false);
   assert.equal(inSources('src/a.mjs', custom.dir), false);
   assert.equal(inSources('extension/node_modules/x.mjs', custom.dir), false);
-  for (const bad of [[], 'src', ['../x'], ['/abs'], [3]]) {
+  for (const bad of [
+    [],
+    'src',
+    ['../x'],
+    ['/abs'],
+    [3],
+    ['.'],
+    ['./scripts'],
+    ['scripts/./nested'],
+  ]) {
     const fx = await fixture({ unitSources: bad });
     assert.throws(() => unitSources(fx.dir), /slicc\.unitSources must be/, JSON.stringify(bad));
   }
@@ -144,4 +153,60 @@ test('a listed non-src directory is diff-covered (TypeScript stripped), and a fi
   const covered = cover(fx);
   assert.equal(covered.status, 0, `${covered.stdout}\n${covered.stderr}`);
   assert.match(covered.stdout, /slicc-unit-cover: PASS 1 unit test files in 1 batch/);
+});
+
+test('a list entry with a . segment fails the hook instead of silently matching nothing', async () => {
+  const fx = await fixture({ unitSources: ['./scripts'] });
+  stage(fx, { 'scripts/c.mjs': 'export const c = (x) => x + 2;\n' });
+  const run = cover(fx);
+  assert.notEqual(run.status, 0, run.stdout);
+  assert.doesNotMatch(run.stdout, /PASS/);
+  assert.match(run.stderr, /slicc\.unitSources must be/);
+});
+
+test('CommonJS and .mts/.cts sources are collected: untested they fail diff coverage, tested they pass', async () => {
+  const fx = await fixture({ unitSources: ['extension'] });
+  stage(fx, {
+    'extension/c.cjs': 'module.exports = (x) => x + 1;\n',
+    'extension/m.mts': 'export const m = (x: number): number => x + 1;\n',
+    'extension/t.cts': 'module.exports = (x: number): number => x + 1;\n',
+  });
+  const uncovered = cover(fx);
+  assert.notEqual(uncovered.status, 0, uncovered.stdout);
+  assert.match(uncovered.stdout, /extension\/c\.cjs \(0\.0%\): Missing lines 1/);
+  assert.match(uncovered.stdout, /extension\/m\.mts \(0\.0%\): Missing lines 1/);
+  assert.match(uncovered.stdout, /extension\/t\.cts \(0\.0%\): Missing lines 1/);
+  assert.match(uncovered.stdout, /slicc-unit-cover: FAIL/);
+  write(fx.dir, {
+    'test/unit/c.test.mjs':
+      "import { test } from 'node:test';\nimport c from '../../extension/c.cjs';\nimport { m } from '../../extension/m.mts';\nimport t from '../../extension/t.cts';\ntest('c', () => c(1) + m(1) + t(1));\n",
+  });
+  const covered = cover(fx);
+  assert.equal(covered.status, 0, `${covered.stdout}\n${covered.stderr}`);
+  assert.match(covered.stdout, /slicc-unit-cover: PASS 1 unit test files in 1 batch/);
+});
+
+test('a staged .jsx or .tsx source fails the hook by name, since its coverage cannot be measured', async () => {
+  const fx = await fixture({ unitSources: ['extension'] });
+  stage(fx, {
+    'extension/v.jsx': 'export const v = () => <div />;\n',
+    'extension/w.tsx': 'export const w = (): number => 1;\n',
+  });
+  const run = cover(fx);
+  assert.notEqual(run.status, 0, run.stdout);
+  assert.match(
+    run.stdout,
+    /slicc-unit-cover: FAIL coverage cannot be measured for JSX, which is not transformed: extension\/v\.jsx extension\/w\.tsx/
+  );
+});
+
+test('a staged source file the lcov does not mention fails the hook by name instead of passing with no lines to check', async () => {
+  const fx = await fixture();
+  stage(fx, { 'packages/p/src/n.mjs': 'export const n = (x) => x + 1;\n' });
+  const run = cover(fx);
+  assert.notEqual(run.status, 0, run.stdout);
+  assert.match(
+    run.stdout,
+    /slicc-unit-cover: FAIL no coverage was collected for packages\/p\/src\/n\.mjs/
+  );
 });
