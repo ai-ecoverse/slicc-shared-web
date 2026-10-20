@@ -63,7 +63,7 @@
   },
   "devDependencies": {
     "@ai-ecoverse/slicc-browsers": "1.11.0",
-    "@ai-ecoverse/slicc-cdp": "1.30.11",
+    "@ai-ecoverse/slicc-cdp": "1.30.18",
     "@biomejs/biome": "2.5.15",
     "monocart-coverage-reports": "2.13.2",
     "pnpm": "12.13.0",
