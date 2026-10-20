@@ -75,6 +75,12 @@ test('a push that keeps failing fails the step after five attempts', (t) => {
   assert.equal(run.count, 5);
 });
 
+test('a fetch --unshallow, which fails on a full clone, runs once', (t) => {
+  const run = release(t, 99, 'fetch --unshallow --tags https://example.invalid/repo.git');
+  assert.equal(run.status, 1);
+  assert.equal(run.count, 1);
+});
+
 test('a command that is not a push or fetch runs once', (t) => {
   const run = release(t, 99, 'tag v1.2.3');
   assert.equal(run.status, 1);
