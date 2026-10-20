@@ -567,8 +567,8 @@ jobs:
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
-      group: release-${{ github.repository }}-${{ github.ref }}
-      cancel-in-progress: true
+      group: release-${{ github.ref_name }}
+      cancel-in-progress: false
     permissions:
       contents: write
       issues: write
