@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
-const shard = fileURLToPath(new URL('../../harness/shard.cjs', import.meta.url));
+const shardPath = fileURLToPath(new URL('../../harness/shard.cjs', import.meta.url));
 const dirs = [];
 after(() => Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))));
 
@@ -43,7 +43,7 @@ function shardEnv(dir, files) {
     ...env,
     SLICC_TEST_FILES: files.join('\n'),
     SLICC_TEST_NODE_OPTIONS: '',
-    NODE_OPTIONS: `--require ${shard} --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=${join(dir, 'junit.xml')}`,
+    NODE_OPTIONS: `--require ${shardPath} --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=${join(dir, 'junit.xml')}`,
   };
 }
 
@@ -79,4 +79,42 @@ test('runs nothing when the shard is empty', async () => {
   });
   assert.match(stdout, /none\.mjs/);
   assert.doesNotMatch(await readFile(join(dir, 'junit.xml'), 'utf8'), /name="(a|b|nested)"/);
+});
+
+test('runs a call outside test-glob in full on shard 0 only, and keeps every call report', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'slicc-shard-'));
+  dirs.push(dir);
+  const plain = (name) => `import { test } from 'node:test';\ntest('${name}', () => {});\n`;
+  await mkdir(join(dir, 'u'));
+  await mkdir(join(dir, 'i'));
+  await writeFile(join(dir, 'u', 'a.test.mjs'), plain('a'));
+  await writeFile(join(dir, 'i', 'b.test.mjs'), plain('b'));
+  await writeFile(join(dir, 'i', 'c.test.mjs'), plain('c'));
+  const ran = {};
+  for (const [shard, file] of [
+    ['0', 'i/b.test.mjs'],
+    ['1', 'i/c.test.mjs'],
+  ]) {
+    const junitDir = join(dir, `junit-${shard}`);
+    await mkdir(junitDir);
+    const junit = join(junitDir, `${shard}.xml`);
+    const env = {
+      ...shardEnv(dir, [file]),
+      SLICC_TEST_ALL: 'i/b.test.mjs\ni/c.test.mjs',
+      SLICC_TEST_SHARD: shard,
+      SLICC_TEST_JUNIT: junit,
+      NODE_OPTIONS: `--require ${shardPath} --test-reporter=junit --test-reporter-destination=${junit}`,
+    };
+    await run('bash', ['-c', 'node --test "u/*.test.mjs" && node --test "i/*.test.mjs"'], {
+      cwd: dir,
+      env,
+    });
+    const reports = await readdir(junitDir);
+    assert.equal(reports.length, 2, reports.join());
+    const xml = (
+      await Promise.all(reports.map((name) => readFile(join(junitDir, name), 'utf8')))
+    ).join();
+    ran[shard] = ['a', 'b', 'c'].filter((name) => xml.includes(`name="${name}"`));
+  }
+  assert.deepEqual(ran, { 0: ['a', 'b'], 1: ['c'] });
 });

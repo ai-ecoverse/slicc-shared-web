@@ -158,7 +158,9 @@ jobs:
       - name: Chrome
         env:
           CHROME: ${{ inputs.chrome }}
-        run: npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser --with-deps ${CHROME:+--version "$CHROME"}
+        run: |
+          DEPS=$( { [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; } && echo 1 || true)
+          npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser ${DEPS:+--with-deps} ${CHROME:+--version "$CHROME"}
 
       - uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
         continue-on-error: true
@@ -186,6 +188,7 @@ jobs:
       - name: Integration tests
         env:
           TEST: ${{ inputs.test }}
+          GLOB: ${{ inputs.test-glob }}
           FILES: ${{ steps.split.outputs.paths }}
           SHARD: ${{ matrix.shard }}
           STAGING_URL: ${{ needs.deploy.outputs.url }}
@@ -194,9 +197,12 @@ jobs:
           [ -f "$shard" ] || shard=harness/shard.cjs
           mkdir -p junit
           SLICC_TEST_FILES=$(tr ' ' '\n' <<< "$FILES")
+          SLICC_TEST_ALL=$(node -e 'for (const file of require("node:fs").globSync(process.argv[1])) console.log(file)' "$GLOB")
+          SLICC_TEST_SHARD=$SHARD
+          SLICC_TEST_JUNIT=$PWD/junit/$SHARD.xml
           SLICC_TEST_NODE_OPTIONS=${NODE_OPTIONS:-}
           NODE_OPTIONS="${NODE_OPTIONS:-} --require $PWD/$shard --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=$PWD/junit/$SHARD.xml"
-          export SLICC_TEST_FILES SLICC_TEST_NODE_OPTIONS NODE_OPTIONS
+          export SLICC_TEST_FILES SLICC_TEST_ALL SLICC_TEST_SHARD SLICC_TEST_JUNIT SLICC_TEST_NODE_OPTIONS NODE_OPTIONS
           bash -c "$TEST"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -300,7 +306,8 @@ jobs:
           REVIEW_BROWSER: ${{ inputs.review-browser }}
           STAGING_URL: ${{ needs.deploy.outputs.url }}
         run: |
-          npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser --with-deps ${CHROME:+--version "$CHROME"}
+          DEPS=$( { [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; } && echo 1 || true)
+          npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser ${DEPS:+--with-deps} ${CHROME:+--version "$CHROME"}
           browser=$(npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp find-browser ${CHROME:+--version "$CHROME"} | tail -1)
           port=9301
           list=
@@ -338,7 +345,7 @@ jobs:
           - $RUNNER_TEMP/base: its base, dependencies installed, to compare with.
           - review/context/: the pull request (pr.json, pr.diff, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json).
           - review/integration/: the integration tests' coverage, artifacts (screenshots, CPU profiles, crash dumps, console logs) and JUnit reports, one directory per shard.
-          - review/browsers.json: four running Chrome instances, reachable over CDP: head and base, each linked through the extension and through slicc-cli. Use them to compare the head's behaviour with the base's.
+          - review/browsers.json: four running Chrome instances, reachable over CDP, one per side (head, base) and link (extension, slicc-cli). The repository's review-browser hook, if it has one, loaded each side's build into them; without one they are bare Chrome. Use them to compare the head's behaviour with the base's.
           ${STAGING_URL:+- The service is deployed to staging at $STAGING_URL.}
 
           Read the change, run what you need, and decide whether it should be merged.
@@ -347,6 +354,7 @@ jobs:
           - summary: a few sentences on the change and your verdict.
           - comments: findings on lines the pull request adds or changes, with path relative to the repository root and the line number in the head.
           - issues: problems worth tracking outside this pull request, each with repo as owner/name, a title and a body.
+            Leave out any that review/context/issues.json already has open, even under another title.
 
           $EXTRA
           EOF
@@ -461,7 +469,16 @@ jobs:
                 console.log(`skipped an issue for ${target}, outside ${repo.split('/')[0]}: ${issue.title}`);
                 continue;
               }
-              await post(`repos/${target}/issues`, { title: issue.title, body: `${issue.body}\n\nFrom ${agent}'s review of ${repo}#${PR}.` }, target === repo ? GH_TOKEN : ISSUES_TOKEN || GH_TOKEN)
+              const token = target === repo ? GH_TOKEN : ISSUES_TOKEN || GH_TOKEN;
+              const open = await fetch(`${api}/repos/${target}/issues?state=open&per_page=100`, {
+                headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json' },
+              }).then((res) => (res.ok ? res.json() : []));
+              const same = open.find((existing) => existing.title.trim().toLowerCase() === issue.title.trim().toLowerCase());
+              if (same) {
+                console.log(`already open: ${same.html_url}`);
+                continue;
+              }
+              await post(`repos/${target}/issues`, { title: issue.title, body: `${issue.body}\n\nFrom ${agent}'s review of ${repo}#${PR}.` }, token)
                 .then((created) => console.log(created.html_url))
                 .catch((error) => { console.error(error.message); failed = true; });
             }
