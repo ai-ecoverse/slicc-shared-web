@@ -15,23 +15,40 @@ const declared = [
   ...workflow.match(/\n {4}secrets:\n((?: {6}.*\n)+)/)[1].matchAll(/^ {6}(\w+):$/gm),
 ].map((match) => match[1]);
 
-test('the deploy step exports the caller secrets but none of the pipeline’s own', () => {
-  for (const name of ['AWS_BEARER_TOKEN_BEDROCK', 'SLICC_ISSUES_TOKEN'])
-    assert.ok(declared.includes(name), name);
-  const secrets = {
-    github_token: 'gh',
-    ...Object.fromEntries(declared.map((name) => [name, name.toLowerCase()])),
-    DEPLOY_TOKEN: 'deploy',
-    OTHER: 'multi\nline',
-  };
+const secrets = {
+  github_token: 'gh',
+  ...Object.fromEntries(declared.map((name) => [name, name.toLowerCase()])),
+  DEPLOY_TOKEN: 'deploy',
+  OTHER: 'multi\nline',
+  THIRD: 'third',
+};
+
+function exported(deploySecrets) {
   const run = spawnSync(process.execPath, ['--input-type=module'], {
     input: script,
     encoding: 'utf8',
-    env: { PATH: process.env.PATH, SECRETS: JSON.stringify(secrets) },
+    env: {
+      PATH: process.env.PATH,
+      SECRETS: JSON.stringify(secrets),
+      DEPLOY_SECRETS: deploySecrets,
+    },
   });
   assert.equal(run.status, 0, run.stderr);
+  return run.stdout;
+}
+
+test('the deploy step exports the caller secrets but none of the pipeline’s own', () => {
+  for (const name of ['AWS_BEARER_TOKEN_BEDROCK', 'SLICC_ISSUES_TOKEN'])
+    assert.ok(declared.includes(name), name);
   assert.equal(
-    run.stdout,
-    'DEPLOY_TOKEN<<SLICC_EOF\ndeploy\nSLICC_EOF\nOTHER<<SLICC_EOF\nmulti\nline\nSLICC_EOF\n'
+    exported(''),
+    'DEPLOY_TOKEN<<SLICC_EOF\ndeploy\nSLICC_EOF\nOTHER<<SLICC_EOF\nmulti\nline\nSLICC_EOF\nTHIRD<<SLICC_EOF\nthird\nSLICC_EOF\n'
+  );
+});
+
+test('with deploy-secrets, the deploy step exports only the listed caller secrets', () => {
+  assert.equal(
+    exported(` THIRD\nDEPLOY_TOKEN  MISSING github_token\n${declared.join('\n')}\n`),
+    'DEPLOY_TOKEN<<SLICC_EOF\ndeploy\nSLICC_EOF\nTHIRD<<SLICC_EOF\nthird\nSLICC_EOF\n'
   );
 });

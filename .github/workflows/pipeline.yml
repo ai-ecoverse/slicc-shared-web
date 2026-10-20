@@ -30,6 +30,9 @@ on:
       deploy:
         type: string
         default: ''
+      deploy-secrets:
+        type: string
+        default: ''
       review-browser:
         type: string
         default: npm run --if-present review:browser
@@ -125,11 +128,13 @@ jobs:
       - name: Secrets as environment variables
         env:
           SECRETS: ${{ toJSON(secrets) }}
+          DEPLOY_SECRETS: ${{ inputs.deploy-secrets }}
         run: |
           node --input-type=module >> "$GITHUB_ENV" <<'EOF'
           const own = new Set(['github_token', 'AWS_BEARER_TOKEN_BEDROCK', 'SLICC_ISSUES_TOKEN']);
+          const only = new Set((process.env.DEPLOY_SECRETS ?? '').split(/\s+/).filter(Boolean));
           for (const [key, value] of Object.entries(JSON.parse(process.env.SECRETS))) {
-            if (!own.has(key)) process.stdout.write(`${key}<<SLICC_EOF\n${value}\nSLICC_EOF\n`);
+            if (!own.has(key) && (only.size === 0 || only.has(key))) process.stdout.write(`${key}<<SLICC_EOF\n${value}\nSLICC_EOF\n`);
           }
           EOF
 
