@@ -98,7 +98,14 @@ export async function connect(url, { exited, tail = () => [] } = {}) {
       targets.delete(params.sessionId);
       drop((call) => call.sessionId === params.sessionId, 'target detached');
     }
-    if (method === 'Inspector.targetCrashed') setTimeout(crash, 200, sessionId);
+    if (method === 'Inspector.targetCrashed') {
+      const target = targets.get(sessionId);
+      if (target) target.stopping = setTimeout(crash, 200, sessionId);
+    }
+    if (method === 'Inspector.targetReloadedAfterCrash') {
+      clearTimeout(targets.get(sessionId)?.stopping);
+      crashed.delete(sessionId);
+    }
     if (method === 'Target.targetCrashed') {
       const status = `${params.status}, code ${params.errorCode}`;
       for (const session of sessionsOf(params.targetId)) crash(session, status);

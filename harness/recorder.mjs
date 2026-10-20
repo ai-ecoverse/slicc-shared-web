@@ -147,11 +147,14 @@ export function ownership(parents) {
   const owned = new Map();
   const targets = new Map();
   const debugging = new Set();
+  const waiting = new Set();
   const mine = (sessionId) => owned.get(targets.get(sessionId)) === sessionId;
   return {
     mine,
-    adopt({ sessionId, targetInfo }, parent) {
+    ours: (sessionId) => mine(sessionId) || waiting.has(sessionId),
+    adopt({ sessionId, targetInfo, waitingForDebugger }, parent) {
       targets.set(sessionId, targetInfo.targetId);
+      if (waitingForDebugger && (!parent || mine(parent))) waiting.add(sessionId);
       if ((parent && !mine(parent)) || owned.has(targetInfo.targetId)) return false;
       owned.set(targetInfo.targetId, sessionId);
       if (parent) parents.set(sessionId, parent);
@@ -168,6 +171,7 @@ export function ownership(parents) {
       if (mine(sessionId)) owned.delete(targets.get(sessionId));
       targets.delete(sessionId);
       debugging.delete(sessionId);
+      waiting.delete(sessionId);
     },
   };
 }
@@ -267,6 +271,10 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
     return ready;
   }
 
+  function resume(sessionId) {
+    return cdp.send('Runtime.runIfWaitingForDebugger', {}, sessionId).catch(ignore);
+  }
+
   function log(sessionId, line) {
     const target = sessions.get(sessionId);
     const into = run ? target?.browserContextId === run.context && run.console : target && early;
@@ -302,15 +310,22 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
     return all;
   }
 
-  cdp.on(async ({ method, params, sessionId }) => {
+  async function lifecycle({ method, params, sessionId }) {
     if (method === 'Target.attachedToTarget') {
       if (own.adopt(params, sessionId)) await attach(params);
+      else if (own.ours(params.sessionId)) await resume(params.sessionId);
     }
     if (method === 'Target.detachedFromTarget') {
       sessions.delete(params.sessionId);
       pauses.delete(params.sessionId);
       own.drop(params.sessionId);
     }
+    const restarted = method === 'Inspector.targetReloadedAfterCrash';
+    if (restarted && own.ours(sessionId)) await resume(sessionId);
+  }
+
+  cdp.on(async ({ method, params, sessionId }) => {
+    await lifecycle({ method, params, sessionId });
     if (method === 'Runtime.consoleAPICalled') {
       const text = params.args.map((arg) => arg.value ?? arg.description).join(' ');
       log(sessionId, `${params.type} ${text}`);
