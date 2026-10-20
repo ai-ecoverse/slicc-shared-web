@@ -688,6 +688,26 @@ export async function foreignWriters(gh, ref, { event, job, repo }) {
   return foreign;
 }
 
+export async function livePull(gh, pull) {
+  const live = await gh.call(`pulls/${pull.number}`);
+  if (live?.head?.sha !== pull.head.sha) {
+    const err = new Error(
+      `#${pull.number} is now at ${live?.head?.sha}, this run is for ${pull.head.sha}`
+    );
+    err.moved = true;
+    throw err;
+  }
+  return live;
+}
+
+export function newestRun(runs, repo, workflow = WORKFLOW) {
+  return (
+    runs
+      .filter((r) => ourRun(r, repo, workflow))
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0] ?? null
+  );
+}
+
 export async function alert(gh, ref, foreign, runUrl) {
   const title = `cert-review: another workflow wrote cert-review on ${ref.slice(0, 12)}`;
   const open = await gh.call('issues?state=open&per_page=100');
