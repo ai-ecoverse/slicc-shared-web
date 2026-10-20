@@ -178,9 +178,25 @@ function handle(req, res, body) {
     });
   }
   if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/rerun$/.exec(p)) && req.method === 'POST') {
+    if (state.rerunBusy) return reply(res, 403, { message: 'This workflow is already running' });
     state.reruns = [...(state.reruns ?? []), Number(m[1])];
     return reply(res, 201);
   }
+  if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/cancel$/.exec(p)) && req.method === 'POST') {
+    state.cancels = [...(state.cancels ?? []), Number(m[1])];
+    const w = state.workflowRuns.find((x) => x.id === Number(m[1]));
+    if (w) w.status = 'completed';
+    return reply(res, 202, {});
+  }
+  if (
+    (m = /^\/repos\/o\/r\/actions\/runs\/(\d+)$/.exec(p)) &&
+    state.workflowRuns.some((x) => x.id === Number(m[1]))
+  )
+    return reply(
+      res,
+      200,
+      state.workflowRuns.find((x) => x.id === Number(m[1]))
+    );
   if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs$/.exec(p)))
     return reply(res, 200, { jobs: state.jobs[m[1]] ?? [] });
   if ((m = /^\/repos\/o\/r\/actions\/artifacts\/(\d+)\/zip$/.exec(p))) {
@@ -2202,7 +2218,7 @@ const certRun = (id, extra = {}) => ({
   ...extra,
 });
 
-test('cert-rerun: marking ready or the approval label re-runs every job of the newest cert-review run on the head; a running one is left alone', async () => {
+test('cert-rerun: marking ready or the approval label re-runs every job of the newest cert-review run on the head; a running one is cancelled first, then re-run', async () => {
   reset();
   state.reruns = [];
   state.workflowRuns = [
@@ -2238,8 +2254,31 @@ test('cert-rerun: marking ready or the approval label re-runs every job of the n
   const busy = await run('rerun.mjs', {
     GITHUB_EVENT_PATH: rerunEvent('rr-busy', 'ready_for_review'),
   });
-  assert.match(busy.stdout, /skip: cert-review run 13 .* is in_progress/);
-  assert.deepEqual(state.reruns, [12, 12]);
+  assert.equal(busy.code, 0, busy.stdout);
+  assert.deepEqual(state.cancels, [13]);
+  assert.deepEqual(state.reruns, [12, 12, 13]);
+  state.workflowRuns.push(certRun(14, { pull_requests: [{ number: 9 }] }));
+  state.rerunBusy = true;
+  const raced = await run('rerun.mjs', {
+    GITHUB_EVENT_PATH: rerunEvent('rr-race', 'ready_for_review'),
+  });
+  state.rerunBusy = false;
+  assert.equal(raced.code, 0, raced.stdout);
+  assert.match(
+    raced.stdout,
+    /skip: run 13 is already re-running/,
+    'run 14 is another pull request’s'
+  );
+  const edited = await run('rerun.mjs', {
+    GITHUB_EVENT_PATH: rerunEvent(
+      'rr-edit',
+      'edited',
+      {},
+      { changes: { base: { ref: { from: 'next' } } } }
+    ),
+  });
+  assert.equal(edited.code, 0, edited.stdout);
+  assert.equal(state.reruns.at(-1), 13);
 });
 
 test('cert-rerun: a fork, a draft, another label or another action is a no-op; no cert-review run to re-run fails visibly', async () => {
@@ -2269,6 +2308,13 @@ test('cert-rerun: a fork, a draft, another label or another action is a no-op; n
       /noop \(label documentation\)/,
     ],
     ['rr-sync', 'synchronize', {}, {}, /noop \(action synchronize\)/],
+    [
+      'rr-title',
+      'edited',
+      {},
+      { changes: { title: { from: 'x' } } },
+      /noop \(edited, not the base\)/,
+    ],
   ]) {
     const r = await run('rerun.mjs', { GITHUB_EVENT_PATH: rerunEvent(name, action, pull, extra) });
     assert.equal(r.code, 0, r.stdout);
@@ -2297,4 +2343,9 @@ test('cert-rerun.yml: actions: write only, no checkout of the pull request, not 
     /github\.event\.pull_request\.head\.repo\.full_name == github\.repository && !github\.event\.pull_request\.draft/
   );
   assert.match(wf, /github\.event\.label\.name == inputs\.approval-label/);
+  assert.match(wf, /github\.event\.action == 'edited' && github\.event\.changes\.base/);
+  assert.match(
+    wf,
+    /concurrency:\n {6}group: cert-rerun-\$\{\{ github\.event\.pull_request\.number \}\}\n {6}cancel-in-progress: false/
+  );
 });

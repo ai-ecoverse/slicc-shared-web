@@ -21,9 +21,12 @@ permissions: {}
 jobs:
   rerun:
     name: re-run cert-review
-    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && (github.event.action == 'ready_for_review' || (github.event.action == 'labeled' && github.event.label.name == inputs.approval-label))
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && (github.event.action == 'ready_for_review' || (github.event.action == 'labeled' && github.event.label.name == inputs.approval-label) || (github.event.action == 'edited' && github.event.changes.base))
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
+    concurrency:
+      group: cert-rerun-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     permissions:
       actions: write
     steps:
@@ -40,7 +43,7 @@ jobs:
         with:
           node-version: 24
 
-      - name: Re-run every job of the newest cert-review run on this head (skip one still running)
+      - name: Re-run every job of the newest cert-review run on this head (cancelling one still running first)
         env:
           GH_TOKEN: ${{ github.token }}
           APPROVAL: ${{ inputs.approval-label }}
