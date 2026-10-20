@@ -44,12 +44,19 @@ export const unrealistic = [
   '--disable-renderer-backgrounding',
 ];
 
+export function headlessByDefault(env = inherited) {
+  if (env.SLICC_HEADLESS === '1') return true;
+  if (env.SLICC_HEADLESS === '0') return false;
+  return !env.CI || env.CI === 'false' || env.CI === '0';
+}
+
 export function commandLine(
   profile,
   extensions = [],
   extra = [],
   realistic = false,
-  builtin = false
+  builtin = false,
+  headless = headlessByDefault()
 ) {
   const loaded = builtin || extensions.length > 0;
   const dropped = new Set([
@@ -58,7 +65,8 @@ export function commandLine(
   ]);
   const base = flags.filter((flag) => !dropped.has(flag));
   const load = loaded ? ['--enable-unsafe-extension-debugging'] : [];
-  return [...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
+  const mode = headless && !realistic ? ['--headless=new'] : [];
+  return [...mode, ...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
 }
 
 export const KEPT = 200;
@@ -310,6 +318,7 @@ export async function launch({
   stallAfter,
   profile = inherited.SLICC_PROFILE === '1',
   realistic = false,
+  headless = headlessByDefault(),
   persistent = false,
   executable,
 } = {}) {
@@ -327,7 +336,7 @@ export async function launch({
   const dumps = await crashpad();
   const { child, exited, stderr } = await start(
     userData,
-    commandLine(userData, loaded, args, realistic, builtin),
+    commandLine(userData, loaded, args, realistic, builtin, headless),
     browser,
     dumps.env
   ).catch(async (error) => {
