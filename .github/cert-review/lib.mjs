@@ -8,6 +8,24 @@ export const MARKER = '<!-- cert-review v2 -->';
 export const ACTIONS_APP = 15368;
 export const WORKFLOW = process.env.CERT_WORKFLOW || '.github/workflows/cert-review.yml';
 
+export function ourPath(path, workflow = WORKFLOW) {
+  return path === workflow || path === `${workflow}@refs/heads/main`;
+}
+
+export function ourRun(run, repo, workflow = WORKFLOW) {
+  const origin = process.env.GITHUB_API_URL ?? 'https://api.github.com';
+  const url = String(run?.workflow_url ?? '');
+  const here = [
+    `${origin}/repos/${repo}/actions/workflows/`,
+    `${origin}/repos/${repo}/actions/required_workflows/`,
+  ];
+  return (
+    ourPath(run?.path, workflow) &&
+    run?.repository?.full_name === repo &&
+    here.some((p) => url.startsWith(p))
+  );
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 export const SCHEMA = JSON.parse(readFileSync(join(here, 'verdict.schema.json'), 'utf8'));
 
@@ -608,7 +626,7 @@ export async function foreignWriters(gh, ref, { event, job, repo }) {
       continue;
     }
     if (
-      run.path !== WORKFLOW ||
+      !ourRun(run, repo) ||
       !events.includes(run.event) ||
       run.head_sha !== ref ||
       run.repository?.full_name !== repo

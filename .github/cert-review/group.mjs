@@ -4,6 +4,7 @@ import {
   api,
   foreignWriters,
   git,
+  ourRun,
   output,
   setCheck,
   sha,
@@ -42,18 +43,15 @@ async function callerAt(memberHead) {
 }
 
 async function runsOf(memberHead) {
-  const file = WORKFLOW.split('/').pop();
   const runs = [];
   for (const ev of EVENTS) {
-    const data = await gh.call(
-      `actions/workflows/${file}/runs?event=${ev}&head_sha=${memberHead}&per_page=50`
-    );
+    const data = await gh.call(`actions/runs?event=${ev}&head_sha=${memberHead}&per_page=100`);
     runs.push(...data.workflow_runs);
   }
   return runs
     .filter(
       (r) =>
-        r.path === WORKFLOW &&
+        ourRun(r, env.GITHUB_REPOSITORY) &&
         EVENTS.includes(r.event) &&
         r.head_sha === memberHead &&
         r.repository?.full_name === env.GITHUB_REPOSITORY

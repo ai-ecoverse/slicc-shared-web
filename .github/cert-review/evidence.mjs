@@ -8,6 +8,7 @@ import {
   globs,
   injectionOf,
   matchesAny,
+  ourRun,
   output,
   sha,
   shownPath,
@@ -46,9 +47,9 @@ const path = `.github/workflows/${file}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function runs(query) {
-  const data = await gh.call(`actions/workflows/${file}/runs?${query}&per_page=50`);
+  const data = await gh.call(`actions/runs?${query}&per_page=100`);
   return (data.workflow_runs ?? [])
-    .filter((r) => r.path === path && r.head_repository?.full_name === repo)
+    .filter((r) => ourRun(r, repo, path) && r.head_repository?.full_name === repo)
     .sort((a, b) => b.id - a.id);
 }
 

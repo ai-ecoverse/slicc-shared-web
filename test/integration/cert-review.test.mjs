@@ -118,27 +118,27 @@ function handle(req, res, body) {
     state.issues.push({ ...body, number: state.nextId++ });
     return reply(res, 201, state.issues.at(-1));
   }
-  if (p === '/repos/o/r/actions/workflows/cert-review.yml/runs')
-    return reply(res, 200, {
-      workflow_runs: state.workflowRuns.filter(
-        (r) =>
-          r.head_sha === url.searchParams.get('head_sha') &&
-          (!url.searchParams.get('event') || r.event === url.searchParams.get('event'))
-      ),
-    });
-  if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs$/.exec(p)))
-    return reply(res, 200, { jobs: state.jobs[m[1]] ?? [] });
-  if (p === '/repos/o/r/actions/workflows/ci.yml/runs') {
+  if (p === '/repos/o/r/actions/runs') {
     const q = url.searchParams;
+    const wf = (r) => ({
+      workflow_url: `${origin}/repos/o/r/actions/workflows/1`,
+      repository: { full_name: 'o/r' },
+      ...r,
+    });
     return reply(res, 200, {
-      workflow_runs: (state.ciRuns ?? []).filter(
-        (r) =>
-          (!q.get('head_sha') || r.head_sha === q.get('head_sha')) &&
-          (!q.get('event') || r.event === q.get('event')) &&
-          (!q.get('branch') || r.head_branch === q.get('branch'))
-      ),
+      workflow_runs: [...state.workflowRuns, ...(state.ciRuns ?? [])]
+        .map(wf)
+        .filter(
+          (r) =>
+            (!q.get('head_sha') || r.head_sha === q.get('head_sha')) &&
+            (!q.get('event') || r.event === q.get('event')) &&
+            (!q.get('branch') || r.head_branch === q.get('branch')) &&
+            (!q.get('status') || r.status === q.get('status'))
+        ),
     });
   }
+  if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs$/.exec(p)))
+    return reply(res, 200, { jobs: state.jobs[m[1]] ?? [] });
   if ((m = /^\/repos\/o\/r\/actions\/artifacts\/(\d+)\/zip$/.exec(p))) {
     const zip = state.zips?.[m[1]];
     if (!zip) return reply(res, 404, { message: 'Not Found' });
@@ -153,7 +153,14 @@ function handle(req, res, body) {
       })),
     });
   if ((m = /^\/repos\/o\/r\/actions\/runs\/(\d+)$/.exec(p)))
-    return reply(res, 200, state.runs[m[1]]);
+    return reply(
+      res,
+      200,
+      state.runs[m[1]] && {
+        workflow_url: `${origin}/repos/o/r/actions/workflows/1`,
+        ...state.runs[m[1]],
+      }
+    );
   return reply(res, 404, { message: `no route ${req.method} ${p}` });
 }
 
@@ -1657,4 +1664,59 @@ test('an artifact from an earlier attempt of the run is never evidence for its l
   const r = await evidence(mkdtempSync(join(scratch, 'ev-')));
   assert.equal(r.code, 1, r.stdout);
   assert.match(r.stdout, /run 900 on the head has none of the artifacts/);
+});
+
+test('an org-required run counts by path and workflow_url: a blank name, a ref-pinned path and a required_workflows url pass; another repository’s url never does', async () => {
+  const required = `${origin}/repos/o/r/actions/required_workflows/9`;
+  const ok = await group(
+    'success',
+    '.github/workflows/cert-review.yml@refs/heads/main',
+    'pull_request_target',
+    { name: '', workflow_url: required }
+  );
+  assert.equal(ok.check.conclusion, 'success', ok.r.stdout);
+  const plain = await group('success', '.github/workflows/cert-review.yml', 'pull_request_target', {
+    name: '',
+    workflow_url: required,
+  });
+  assert.equal(plain.check.conclusion, 'success', plain.r.stdout);
+  for (const [why, extra] of [
+    [
+      'another repository’s workflow url',
+      { workflow_url: `${origin}/repos/evil/r/actions/workflows/1` },
+    ],
+    ['no workflow url', { workflow_url: '' }],
+    ['another ref of the path', { path: '.github/workflows/cert-review.yml@refs/heads/pr' }],
+  ]) {
+    const bad = await group(
+      'success',
+      extra.path ?? '.github/workflows/cert-review.yml',
+      'pull_request_target',
+      extra
+    );
+    assert.equal(bad.check.conclusion, 'failure', why);
+  }
+});
+
+test('post: an earlier check run of the org-required run is not a second writer', async () => {
+  const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), () => {
+    writer(
+      559,
+      '.github/workflows/cert-review.yml@refs/heads/main',
+      'pull_request_target',
+      'failure'
+    );
+    state.runs['559'].workflow_url = `${origin}/repos/o/r/actions/required_workflows/9`;
+    state.checks.push(
+      spoofCheck({ external_id: `v2:7:${shas.code}:559:1`, conclusion: 'failure' })
+    );
+  });
+  assert.equal(r.code, 0, r.stdout);
+  assert.equal(check.conclusion, 'success');
+  assert.equal(state.issues.length, 0);
+});
+
+test('every run lookup lists actions/runs and filters by path, never the per-workflow endpoint that omits org-required runs', () => {
+  for (const f of ['group.mjs', 'evidence.mjs', 'lib.mjs', 'post.mjs'])
+    assert.doesNotMatch(readFileSync(join(cert, f), 'utf8'), /actions\/workflows\/\$\{/, f);
 });
