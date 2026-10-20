@@ -457,6 +457,10 @@ jobs:
             }
             for (const issue of findings.issues) {
               const target = issue.repo || repo;
+              if (target.split('/')[0] !== repo.split('/')[0]) {
+                console.log(`skipped an issue for ${target}, outside ${repo.split('/')[0]}: ${issue.title}`);
+                continue;
+              }
               await post(`repos/${target}/issues`, { title: issue.title, body: `${issue.body}\n\nFrom ${agent}'s review of ${repo}#${PR}.` }, target === repo ? GH_TOKEN : ISSUES_TOKEN || GH_TOKEN)
                 .then((created) => console.log(created.html_url))
                 .catch((error) => { console.error(error.message); failed = true; });

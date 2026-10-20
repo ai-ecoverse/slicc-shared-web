@@ -83,7 +83,7 @@ Each reviewer answers with `findings.json`, held to one JSON schema:
 }
 ```
 
-**Post** is the only job that writes to GitHub. Per reviewer it sets the commit status `review / claude` or `review / codex` (`success` for `approved`, `failure` for `denied`, `error` without findings), comments the verdict and summary on the pull request, posts each comment on its line (or, for a line outside the diff, as a pull request comment naming it) and opens each issue. An issue in another repo needs `SLICC_ISSUES_TOKEN`, a token that can open issues there.
+**Post** is the only job that writes to GitHub. Per reviewer it sets the commit status `review / claude` or `review / codex` (`success` for `approved`, `failure` for `denied`, `error` without findings), comments the verdict and summary on the pull request, posts each comment on its line (or, for a line outside the diff, as a pull request comment naming it) and opens each issue. An issue in another repo of the same org needs `SLICC_ISSUES_TOKEN`, a token that can open issues there; one outside the org is logged and skipped.
 
 **Release** runs `semantic-release` after lint, without any test: what reached `main` went through the merge queue.
 
@@ -122,6 +122,10 @@ Every pull request does, except Renovate's: one opened by `renovate[bot]` from a
 | `AWS_BEARER_TOKEN_BEDROCK` (org secret) | both reviewers |
 | `SLICC_ISSUES_TOKEN` | issues in other repos |
 | anything else | `deploy`, as environment variables |
+
+Pull requests from forks are not supported: GitHub gives them no secrets, so the reviewers can't run and `ci / review` stays red. A maintainer opens the change again from a branch in the repo.
+
+The reviewers run the pull request's code (`npm ci`, `review-browser`) in the job that then hands the Bedrock token to the agents, so a pull request's code can read the token. That is accepted: a branch in the repo needs write access, and forks get no token.
 
 Coming from `node-ci.yml` and `node-release.yml`, both removed with `.github/actions/cert-self-guard`:
 
