@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: release
-  cancel-in-progress: true
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   release:
