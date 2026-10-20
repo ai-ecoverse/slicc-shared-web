@@ -59,7 +59,7 @@ async function runsOf(memberHead) {
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id);
 }
 
-const DEADLINE = Date.now() + Number(env.CERT_GROUP_DEADLINE_MS ?? 12 * 60000);
+const DEADLINE = Date.now() + Number(env.CERT_GROUP_DEADLINE_MS ?? 7 * 60000);
 
 async function jobsOf(r) {
   return (await gh.call(`actions/runs/${r.id}/attempts/${r.run_attempt}/jobs?per_page=100`)).jobs;

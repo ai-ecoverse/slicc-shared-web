@@ -70,6 +70,10 @@ function handle(req, res, body) {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   let m;
+  if (state.flaky?.[p] > 0) {
+    state.flaky[p]--;
+    return reply(res, 502, { message: 'bad gateway' });
+  }
   if (p === '/graphql')
     return reply(res, 200, {
       data: {
@@ -150,10 +154,6 @@ function handle(req, res, body) {
   if (p === '/repos/o/r/issues' && req.method === 'POST') {
     state.issues.push({ ...body, number: state.nextId++ });
     return reply(res, 201, state.issues.at(-1));
-  }
-  if (state.flaky?.[p] > 0) {
-    state.flaky[p]--;
-    return reply(res, 502, { message: 'bad gateway' });
   }
   if (p === '/repos/o/r/actions/runs') {
     state.polls = (state.polls ?? 0) + 1;
@@ -1979,9 +1979,57 @@ test('a GET that answers 502 is retried, not taken as an answer', async () => {
   });
   assert.equal(r.code, 0, r.stdout);
   assert.equal(check.state, 'success');
+  assert.equal(
+    state.flaky[`/repos/o/r/commits/${shas.code}/statuses`],
+    0,
+    'the 502 was served and retried'
+  );
 });
 
 test('both fallbacks also run when the job is cancelled, so cert-review never waits forever', () => {
   const wf = readFileSync(join(root, '.github/workflows/cert-review.yml'), 'utf8');
   assert.equal(wf.split('if: (failure() || cancelled()) && steps.').length - 1, 2);
+});
+
+test('the merge-group deadline ends well inside the job timeout', () => {
+  const wf = readFileSync(join(root, '.github/workflows/cert-review.yml'), 'utf8');
+  const job = wf.slice(wf.indexOf('\n  group:\n'));
+  const timeout = Number(/timeout-minutes: (\d+)/.exec(job)[1]);
+  const deadline = Number(
+    /CERT_GROUP_DEADLINE_MS \?\? (\d+) \* 60000/.exec(
+      readFileSync(join(cert, 'group.mjs'), 'utf8')
+    )[1]
+  );
+  assert.ok(deadline + 2 < timeout, `${deadline} min deadline, ${timeout} min timeout`);
+});
+
+test('the fallback writes no second status for an attempt that already set one', async () => {
+  reset();
+  const wf = readFileSync(join(root, '.github/workflows/cert-review.yml'), 'utf8');
+  const fallback = /\n {2}FALLBACK: \|\n((?: {4}.*\n)+)/.exec(wf)[1].replace(/^ {4}/gm, '');
+  const env = {
+    ...process.env,
+    GITHUB_API_URL: origin,
+    GITHUB_SERVER_URL: 'https://github.example',
+    GITHUB_REPOSITORY: 'o/r',
+    GITHUB_RUN_ID: '4242',
+    GITHUB_RUN_ATTEMPT: '1',
+    GH_TOKEN: 'x',
+    HEAD_SHA: shas.code,
+    STAGE: 'post',
+    PR: '7',
+  };
+  const go = () =>
+    new Promise((done) => {
+      const c = spawn(process.execPath, ['--input-type=module', '-e', fallback], { env });
+      c.on('close', done);
+    });
+  await go();
+  assert.equal(state.checks.filter((c) => c.kind === 'status').length, 1);
+  await go();
+  assert.equal(
+    state.checks.filter((c) => c.kind === 'status').length,
+    1,
+    'no second status for attempt 1'
+  );
 });

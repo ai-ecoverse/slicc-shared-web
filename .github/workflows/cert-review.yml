@@ -90,6 +90,9 @@ env:
     const e = process.env;
     const run = `${e.GITHUB_SERVER_URL}/${e.GITHUB_REPOSITORY}/actions/runs/${e.GITHUB_RUN_ID}/attempts/${e.GITHUB_RUN_ATTEMPT}`;
     const body = { state: 'failure', context: 'cert-review', description: `incomplete: ${e.STAGE}; re-run`, target_url: run };
+    const head = { authorization: `Bearer ${e.GH_TOKEN}`, accept: 'application/vnd.github+json' };
+    const seen = await fetch(`${e.GITHUB_API_URL}/repos/${e.GITHUB_REPOSITORY}/commits/${e.HEAD_SHA}/statuses?per_page=100`, { headers: head }).then((x) => (x.ok ? x.json() : [])).catch(() => []);
+    if (seen.some((x) => x.context === 'cert-review' && x.target_url === run)) { console.log(`cert-review: this attempt already set its status on ${e.HEAD_SHA}`); process.exit(1); }
     const r = await fetch(`${e.GITHUB_API_URL}/repos/${e.GITHUB_REPOSITORY}/statuses/${e.HEAD_SHA}`, { method: 'POST', headers: { authorization: `Bearer ${e.GH_TOKEN}`, accept: 'application/vnd.github+json' }, body: JSON.stringify(body) });
     console.log(`cert-review: failure on ${e.HEAD_SHA} (incomplete: ${e.STAGE}), HTTP ${r.status}`);
     process.exit(1);
