@@ -15,7 +15,9 @@ export function unitSources(root = process.cwd()) {
     !list.length ||
     !list.every(
       (d) =>
-        typeof d === 'string' && /^[\w.-]+(\/[\w.-]+)*$/.test(d) && !d.split('/').includes('..')
+        typeof d === 'string' &&
+        /^[\w.-]+(\/[\w.-]+)*$/.test(d) &&
+        d.split('/').every((p) => p !== '.' && p !== '..')
     )
   )
     throw new Error(

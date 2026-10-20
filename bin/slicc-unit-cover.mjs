@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { code, ParseError, select } from '../unit/graph.mjs';
@@ -55,6 +55,13 @@ if (
   say('no code staged, skipping unit tests and diff coverage');
   verdict(true, 'no code staged');
 }
+const measured = staged.filter(
+  (file) => code.test(file) && inSources(file, root) && existsSync(join(root, file))
+);
+const jsx = measured.filter((file) => /x$/.test(file));
+if (jsx.length > 0) {
+  verdict(false, `coverage cannot be measured for JSX, which is not transformed: ${jsx.join(' ')}`);
+}
 
 const size = Number(process.env.SLICC_UNIT_BATCH ?? 60);
 const tests = selection(staged);
@@ -86,6 +93,18 @@ const cover = existsSync(local)
   : fileURLToPath(new URL('slicc-diff-cover.sh', import.meta.url));
 const files = tests === undefined ? 'every unit test file' : `${tests.length} unit test files`;
 const counted = `${batches.length} ${batches.length === 1 ? 'batch' : 'batches'}`;
+const lcov = (reports.length > 0 ? reports : [join('coverage', 'unit', 'lcov.info')])
+  .map((report) => {
+    try {
+      return readFileSync(join(root, report), 'utf8');
+    } catch {
+      return '';
+    }
+  })
+  .join('\n');
+const seen = new Set(lcov.match(/^SF:.*$/gm)?.map((line) => line.slice(3)) ?? []);
+const missing = measured.filter((file) => !seen.has(file));
+if (missing.length > 0) verdict(false, `no coverage was collected for ${missing.join(' ')}`);
 const covered = run(cover, reports, process.env);
 if (covered !== 0) verdict(false, `diff coverage is not 100% (${files} in ${counted})`);
 verdict(true, `${files} in ${counted}, diff coverage 100%`);
