@@ -340,6 +340,21 @@ test('a worktree set up by the old per-worktree installer drops its absolute cor
   ranWith(commit(main, 'main still on its old hooks'), main, [a, b]);
 });
 
+test('it succeeds whatever core.hooksPath is already set, shared or per worktree', () => {
+  const { base, main, a } = fixture();
+  modules(a);
+  for (const value of ['/elsewhere/hooks', 'node_modules/.git-hooks', '.githooks']) {
+    ok(main, 'config', 'core.hooksPath', value);
+    install(a);
+    assert.equal(ok(a, 'config', '--get-all', 'core.hooksPath'), '.githooks');
+  }
+  ok(main, 'config', 'extensions.worktreeConfig', 'true');
+  ok(a, 'config', '--worktree', 'core.hooksPath', join(base, 'other', 'worktree-hooks'));
+  install(a);
+  assert.equal(ok(a, 'config', '--get-all', 'core.hooksPath'), '.githooks');
+  ranWith(commit(a, 'a'), a, [main]);
+});
+
 test('outside a git checkout it does nothing and exits 0', () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'slicc-worktree-hooks-none-')));
   dirs.push(dir);

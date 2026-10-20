@@ -17,7 +17,7 @@ mkdir -p .githooks
 for hook in node_modules/.git-hooks/*; do
   name="${hook##*/}"
   case "$name" in *.*) continue ;; esac
-  [ -f "$hook" ] && [ ! -e ".githooks/$name" ] || continue
+  if [ ! -f "$hook" ] || [ -e ".githooks/$name" ]; then continue; fi
   cat >".githooks/$name" <<'SHIM'
 #!/bin/sh
 hook="${0%/*}/../node_modules/.git-hooks/${0##*/}"
