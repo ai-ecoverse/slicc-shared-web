@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { code, ParseError, select } from '../unit/graph.mjs';
 import { inject } from '../unit/inject.mjs';
+import { inSources } from '../unit/sources.mjs';
 
 const root = process.cwd();
 const say = (line) => process.stderr.write(`slicc-unit-cover: ${line}\n`);
@@ -47,7 +48,10 @@ function selection(staged) {
 const staged = (git('diff', '--cached', '--name-only', '--relative', '--no-renames', '-z') ?? '')
   .split('\0')
   .filter(Boolean);
-if (process.env.SLICC_UNIT_ALL !== '1' && !staged.some((file) => code.test(file))) {
+if (
+  process.env.SLICC_UNIT_ALL !== '1' &&
+  !staged.some((file) => code.test(file) && inSources(file, root))
+) {
   say('no code staged, skipping unit tests and diff coverage');
   verdict(true, 'no code staged');
 }
