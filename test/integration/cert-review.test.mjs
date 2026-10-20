@@ -1718,5 +1718,44 @@ test('post: an earlier check run of the org-required run is not a second writer'
 
 test('every run lookup lists actions/runs and filters by path, never the per-workflow endpoint that omits org-required runs', () => {
   for (const f of ['group.mjs', 'evidence.mjs', 'lib.mjs', 'post.mjs'])
-    assert.doesNotMatch(readFileSync(join(cert, f), 'utf8'), /actions\/workflows\/\$\{/, f);
+    assert.doesNotMatch(
+      readFileSync(join(cert, f), 'utf8'),
+      /actions\/workflows\/[^`'"]*\/runs/,
+      f
+    );
+});
+
+test('evidence takes only the plain workflow path: an org-required run of a same-named workflow is never evidence', async () => {
+  evidenceState({
+    headRuns: [
+      ciRun({
+        id: 905,
+        event: 'pull_request',
+        head_sha: shas.code,
+        pull_requests: [{ number: 7 }],
+        path: '.github/workflows/ci.yml@refs/heads/main',
+        workflow_url: `${origin}/repos/o/r/actions/required_workflows/3`,
+      }),
+    ],
+  });
+  const r = await evidence(mkdtempSync(join(scratch, 'ev-')));
+  assert.equal(r.code, 1, r.stdout);
+  assert.match(r.stdout, /no ci\.yml pull_request run on the head/);
+});
+
+test('the base side pages through push runs, and an exhausted page cap is INCOMPLETE, never a silent none', async () => {
+  const filler = Array.from({ length: 100 }, (_, i) => ({
+    id: 2000 + i,
+    path: '.github/workflows/other.yml',
+    event: 'push',
+    head_sha: shas.base,
+    head_branch: 'main',
+    status: 'completed',
+    conclusion: 'success',
+    head_repository: { full_name: 'o/r' },
+  }));
+  evidenceState({ baseRuns: filler });
+  const r = await evidence(mkdtempSync(join(scratch, 'ev-')));
+  assert.equal(r.code, 1, r.stdout);
+  assert.match(r.stdout, /within the newest 1000 push runs/);
 });

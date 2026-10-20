@@ -46,12 +46,15 @@ if (!names.length) stop('evidence-artifacts names no artifact');
 const path = `.github/workflows/${file}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const ours = (r) =>
+  r.path === path && ourRun(r, repo, path) && r.head_repository?.full_name === repo;
+
 async function runs(query) {
   const data = await gh.call(`actions/runs?${query}&per_page=100`);
-  return (data.workflow_runs ?? [])
-    .filter((r) => ourRun(r, repo, path) && r.head_repository?.full_name === repo)
-    .sort((a, b) => b.id - a.id);
+  return (data.workflow_runs ?? []).filter(ours).sort((a, b) => b.id - a.id);
 }
+
+const BASE_PAGES = 10;
 
 async function headRun() {
   const deadline = Date.now() + waitMs;
@@ -89,12 +92,25 @@ function behind(commit) {
 
 async function baseRun() {
   const ref = encodeURIComponent(pull.base.ref);
-  return (await runs(`event=push&branch=${ref}&status=completed`)).find(
-    (r) =>
-      r.event === 'push' &&
-      r.status === 'completed' &&
-      ['success', 'failure'].includes(r.conclusion) &&
-      behind(r.head_sha)
+  const fit = (r) =>
+    r.event === 'push' &&
+    r.status === 'completed' &&
+    ['success', 'failure'].includes(r.conclusion) &&
+    behind(r.head_sha);
+  for (let page = 1; page <= BASE_PAGES; page++) {
+    const data = await gh.call(
+      `actions/runs?event=push&branch=${ref}&status=completed&per_page=100&page=${page}`
+    );
+    const list = data.workflow_runs ?? [];
+    const found = list
+      .filter(ours)
+      .sort((a, b) => b.id - a.id)
+      .find(fit);
+    if (found) return found;
+    if (list.length < 100) return undefined;
+  }
+  stop(
+    `no finished push run of ${file} on ${pull.base.ref} within the newest ${BASE_PAGES * 100} push runs`
   );
 }
 
