@@ -57,14 +57,14 @@ jobs:
 
       - run: npm ci
 
-      - name: The recorder and the unit-cover hook on monocart-coverage-reports ${{ matrix.mcr }}
+      - name: The recorder, the unit-cover hook and diff coverage on monocart-coverage-reports ${{ matrix.mcr }}
         env:
           MCR: ${{ matrix.mcr }}
         run: |
           npm install --no-save --no-audit --no-fund "monocart-coverage-reports@$MCR"
           node -p 'require("monocart-coverage-reports/package.json").version'
           npx --no-install slicc-cdp install-browser
-          xvfb-run -a node --test test/integration/recorder.test.mjs test/integration/unit-cover.test.mjs
+          xvfb-run -a node --test test/integration/recorder.test.mjs test/integration/unit-cover.test.mjs test/integration/dot-dir-cover.test.mjs
 
   pipeline:
     if: github.event_name != 'push'
