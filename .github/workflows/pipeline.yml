@@ -127,8 +127,9 @@ jobs:
           SECRETS: ${{ toJSON(secrets) }}
         run: |
           node --input-type=module >> "$GITHUB_ENV" <<'EOF'
+          const own = new Set(['github_token', 'AWS_BEARER_TOKEN_BEDROCK', 'SLICC_ISSUES_TOKEN']);
           for (const [key, value] of Object.entries(JSON.parse(process.env.SECRETS))) {
-            if (key !== 'github_token') process.stdout.write(`${key}<<SLICC_EOF\n${value}\nSLICC_EOF\n`);
+            if (!own.has(key)) process.stdout.write(`${key}<<SLICC_EOF\n${value}\nSLICC_EOF\n`);
           }
           EOF
 
