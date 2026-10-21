@@ -59,7 +59,9 @@ function dynamics(ast) {
       continue;
     }
     const value = dynamic(node);
-    if (value !== undefined) found.push({ spec: value, names: [ALL] });
+    if (value !== undefined) {
+      found.push({ spec: value, names: [ALL], asset: node.type === 'NewExpression' });
+    }
     for (const key of Object.keys(node)) {
       const child = node[key];
       if (Array.isArray(child)) {
