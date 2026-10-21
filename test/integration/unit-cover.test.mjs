@@ -625,3 +625,29 @@ test('a unit test that never resolves times out after SLICC_UNIT_TIMEOUT and the
   );
   assert.equal(run.covered, undefined);
 });
+
+test('a selection that runs past SLICC_UNIT_BATCH_TIMEOUT is killed, process group and all, and the FAIL names the batch and its files', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/a.test.mjs': unit(
+      'a',
+      "import { a } from '../../src/a.mjs';\na(1);\ntest('waits with no limit of its own', { timeout: Number.POSITIVE_INFINITY }, () => new Promise(() => setInterval(() => {}, 1000)));"
+    ),
+  });
+  change(dir, {
+    'src/a.mjs': 'export const a = (x) => x + 2;\n',
+    'src/b.mjs': 'export const b = (x) => x * 3;\n',
+  });
+  const run = await bounded(
+    dir,
+    { SLICC_UNIT_BATCH: '1', SLICC_UNIT_BATCH_TIMEOUT: '8000' },
+    45_000
+  );
+  assert.equal(run.signal, null, 'the hook hung on the batch');
+  assert.notEqual(run.status, 0);
+  assert.deepEqual(verdicts(run), [
+    'slicc-unit-cover: FAIL batch 1 of 2 ran past 8000ms and was killed (test/unit/a.test.mjs)',
+  ]);
+  const left = spawnSync('pgrep', ['-f', join(dir, 'node_modules')], { encoding: 'utf8' });
+  assert.equal(left.stdout, '', 'nothing of the batch is left running');
+});
