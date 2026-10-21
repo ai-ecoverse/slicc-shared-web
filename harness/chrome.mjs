@@ -7,7 +7,7 @@ import { env as inherited } from 'node:process';
 import { promisify } from 'node:util';
 import { executablePath, explicit } from './browser.mjs';
 import { cdn } from './cdn.mjs';
-import { CRASHED, connect, pipe } from './cdp.mjs';
+import { CRASHED, connect, pipe, SEND_TIMEOUT } from './cdp.mjs';
 import { crashpad } from './dumps.mjs';
 import {
   builtinWanted,
@@ -268,7 +268,8 @@ export function unguarded(cdp) {
     return () => off(listener);
   };
   return {
-    send: (method, params = {}, sessionId = undefined) => cdp.send(method, params, sessionId),
+    send: (method, params = {}, sessionId = undefined, ms = SEND_TIMEOUT) =>
+      cdp.send(method, params, sessionId, ms),
     on,
     off,
     get events() {
