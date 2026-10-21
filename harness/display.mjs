@@ -32,10 +32,11 @@ function stopper(xvfb) {
   };
 }
 
-export async function ownDisplay(env = inherited) {
+async function start(env) {
+  const wanted = 1000 + Math.floor(Math.random() * 50000);
   const xvfb = spawn(
     'Xvfb',
-    ['-displayfd', '3', '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'],
+    [`:${wanted}`, '-displayfd', '3', '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'],
     { detached: true, stdio: ['ignore', 'ignore', 'pipe', 'pipe'] }
   );
   const close = stopper(xvfb);
@@ -63,6 +64,16 @@ export async function ownDisplay(env = inherited) {
     throw new Error(`Xvfb named no display within 10 s\n${said}`);
   }
   return { env: { ...env, DISPLAY: `:${display}` }, child: xvfb, close };
+}
+
+export async function ownDisplay(env = inherited) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await start(env);
+    } catch (error) {
+      if (attempt >= 5) throw error;
+    }
+  }
 }
 
 export async function screenFor(headed, env = inherited) {
