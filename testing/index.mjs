@@ -20,7 +20,11 @@ export function initFixtureRepo(dir, { hooks = true } = {}) {
   if (!hooks) git(dir, 'config', 'core.hooksPath', devNull);
 }
 
+export function commit(dir, message) {
+  git(dir, 'commit', '-q', '--allow-empty', '-m', message);
+}
+
 export function commitAll(dir, message) {
   git(dir, 'add', '-A', '--', ':/');
-  git(dir, 'commit', '-q', '--allow-empty', '-m', message);
+  commit(dir, message);
 }
