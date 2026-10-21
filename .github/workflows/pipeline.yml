@@ -372,7 +372,8 @@ jobs:
             : missing.length > 0 ? `${missing.length} test-glob files ran on no shard`
             : twice.length > 0 ? `${twice.length} test-glob files ran on more than one shard`
             : '';
-          const ran = `${tests} tests${skipped ? ` (${skipped} skipped)` : ''} in ${reports.length} JUnit reports`;
+          const once = files.length - missing.length - twice.length;
+          const ran = `${tests} tests${skipped ? ` (${skipped} skipped)` : ''} in ${reports.length} JUnit reports${files.length ? `, ${once} of ${files.length} test-glob files on exactly one shard` : ''}`;
           console.log(why ? `integration: FAIL ${why} (${ran})` : `integration: PASS ${ran}`);
           process.exit(why ? 1 : 0);
           EOF

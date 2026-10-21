@@ -146,6 +146,7 @@ test('integration fails when a test-glob file ran on no shard or on two', () => 
   assert.match(integration, /FILES: \$\{\{ needs\.lint\.outputs\.files \}\}/);
   assert.match(integration, /ran on no shard/);
   assert.match(integration, /ran on more than one shard/);
+  assert.match(integration, /of \$\{files\.length\} test-glob files on exactly one shard/);
 });
 
 test("an issue post can't open in another repo becomes a pull request comment", () => {
