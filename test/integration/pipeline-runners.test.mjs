@@ -69,14 +69,14 @@ test("a caller's command fails on its first failing line, pipes included", () =>
   for (const [call] of calls) assert.match(call, /^bash -eo pipefail -c /, call);
 });
 
-test('tests run on pull requests and in the merge queue; a release also runs on workflow_dispatch', () => {
+test('tests run on pull requests and in the merge queue, and a release only on a push to main', () => {
   const both = "(github.event_name == 'pull_request' || github.event_name == 'merge_group')";
   for (const name of ['test', 'integration', 'review']) {
     assert.ok(value(jobs()[name], 'if').startsWith(both), name);
   }
-  assert.match(
+  assert.equal(
     value(jobs().release, 'if'),
-    /^\(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs\/heads\/main'$/
+    "github.event_name == 'push' && github.ref == 'refs/heads/main'"
   );
 });
 
