@@ -198,3 +198,49 @@ test('TypeScript that needs a transform (enums, parameter properties) runs under
   assert.match(uncovered.stdout, /slicc-unit-cover: FAIL diff coverage is not 100%/);
   assert.doesNotMatch(uncovered.out, /ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX/);
 });
+
+test('a TS-convention ./x.js specifier loads the sibling x.ts, and a package whose main is JSON imports without an attribute', async () => {
+  const fx = await fixture();
+  write(fx.dir, {
+    'src/a.ts': [
+      "import data from 'json-main';",
+      "import { next } from './tally.mjs';",
+      'export enum Kind {',
+      '  Plain,',
+      '  Fancy,',
+      '}',
+      'export const pick = (fancy: boolean): Kind => (fancy ? Kind.Fancy : Kind.Plain);',
+      'export const sized = (): number => next(data.size);',
+      '',
+    ].join('\n'),
+    'node_modules/json-main/package.json': JSON.stringify({ name: 'json-main', main: 'data.json' }),
+    'node_modules/json-main/data.json': JSON.stringify({ size: 41 }),
+    'test/unit/a.test.mjs': [
+      "import assert from 'node:assert/strict';",
+      "import { test } from 'node:test';",
+      "import { createRequire } from 'node:module';",
+      "import data from 'json-main';",
+      "import { Kind, pick, sized } from '../../src/a.js';",
+      "test('a', () => {",
+      '  assert.equal(pick(true), Kind.Fancy);',
+      '  assert.equal(pick(false), Kind.Plain);',
+      '  assert.equal(sized(), 42);',
+      '  assert.deepEqual(data, { size: 41 });',
+      "  assert.equal(new (createRequire(import.meta.url)('../../src/counter.cjs').Counter)().count, 0);",
+      '});',
+      '',
+    ].join('\n'),
+  });
+  git(fx.dir, 'add', 'src');
+  const covered = cover(fx);
+  assert.equal(covered.status, 0, covered.out);
+  assert.match(
+    covered.stdout,
+    /slicc-unit-cover: PASS 1 unit test files in 1 batch, diff coverage 100%/
+  );
+  assert.match(covered.stderr, /running 1 of 2 unit test files/);
+  const typed = lines(fx.dir, 'src/a.ts');
+  assert.ok(typed[7] > 0, JSON.stringify(typed));
+  assert.ok(typed[8] > 0, JSON.stringify(typed));
+  assert.ok(lines(fx.dir, 'src/tally.mts')[4] > 0);
+});
