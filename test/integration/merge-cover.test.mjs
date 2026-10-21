@@ -264,3 +264,25 @@ test('renaming a source file during a merge runs the unit tests that import it',
   assert.match(moved.stderr, /running 1 of 1 unit test files/);
   assert.match(moved.stdout, /the unit tests failed/);
 });
+
+test('a staged source file with a non-ASCII name is diff-covered', async () => {
+  const fx = await fixture();
+  stage(fx.dir, { 'src/é.mjs': `export const s = 1;\n${uncovered('own')}` });
+  const own = cover(fx);
+  assert.equal(own.status, 1, own.stdout + own.stderr);
+  assert.match(own.stdout, /src\/é\.mjs \([\d.]+%\): Missing lines 1-3$/m);
+});
+
+test('in a merge, a file with a non-ASCII name is diff-covered', async () => {
+  const fx = await fixture();
+  save(fx.dir, { 'src/é.mjs': 'export const s = 1;\n' }, 'side');
+  git(fx.dir, ['switch', '-q', fx.main]);
+  save(fx.dir, { 'src/m.mjs': `export const m = () => 'm';\n${uncovered('main')}` }, 'main');
+  git(fx.dir, ['switch', '-q', 'side']);
+  git(fx.dir, ['merge', '-q', '--no-ff', '--no-commit', fx.main]);
+  stage(fx.dir, { 'src/é.mjs': `export const s = 1;\n${uncovered('own')}` });
+  const own = cover(fx);
+  assert.equal(own.status, 1, own.stdout + own.stderr);
+  assert.match(own.stdout, /src\/é\.mjs \([\d.]+%\): Missing lines 2-3$/m);
+  assert.doesNotMatch(own.stdout, /src\/m\.mjs/);
+});

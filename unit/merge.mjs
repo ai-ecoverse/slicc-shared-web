@@ -11,6 +11,8 @@ const diff = [
   'diff.srcPrefix=a/',
   '-c',
   'diff.dstPrefix=b/',
+  '-c',
+  'core.quotePath=false',
   'diff',
   '--cached',
   '--no-color',
