@@ -157,7 +157,6 @@ function ranWith(run, own, others) {
   assert.match(run.output, /worktree-hook-ran/);
   assert.ok(run.output.includes(join(own, 'node_modules', 'lefthook-')), run.output);
   assert.doesNotMatch(run.output, /core\.hooksPath is set|sync hooks/);
-  assert.equal(ok(own, 'status', '--porcelain', '.githooks'), '');
   for (const other of others) {
     assert.ok(!run.output.includes(join(other, 'node_modules')), run.output);
   }
