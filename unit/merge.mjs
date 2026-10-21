@@ -11,11 +11,14 @@ const diff = [
   'diff.srcPrefix=a/',
   '-c',
   'diff.dstPrefix=b/',
+  '-c',
+  'core.quotePath=false',
   'diff',
   '--cached',
   '--no-color',
   '--no-ext-diff',
   '--no-relative',
+  '-M',
   '-U0',
 ];
 const escapes = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 };
@@ -31,7 +34,9 @@ export function unquote(text) {
   const bytes = [];
   for (let at = 1; at < text.length - 1; at++) {
     if (text[at] !== '\\') {
-      bytes.push(text.charCodeAt(at));
+      const char = String.fromCodePoint(text.codePointAt(at));
+      bytes.push(...Buffer.from(char));
+      at += char.length - 1;
       continue;
     }
     const next = text[++at];
