@@ -26,7 +26,10 @@ if (report && process.execArgv.includes('--test') && !process.env.NODE_TEST_CONT
   const file = relative(process.cwd(), process.argv[1] ?? '');
   const note = (line) => appendFileSync(report, `${file}${line}\n`);
   const beat = new Int32Array(new SharedArrayBuffer(4));
-  const alive = () => Atomics.notify(beat, 0, Atomics.add(beat, 0, 1) + 1);
+  const alive = () => {
+    Atomics.add(beat, 0, 1);
+    Atomics.notify(beat, 0);
+  };
   const { after, afterEach, beforeEach } = require('node:test');
   let running = 0;
   beforeEach(() => {
