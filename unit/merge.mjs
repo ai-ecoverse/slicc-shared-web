@@ -93,21 +93,46 @@ export function parents(root) {
   return [...merging, ...picked];
 }
 
+export function renames(text) {
+  const moved = new Map();
+  const parts = text.split('\0');
+  for (let at = 0; at < parts.length; at += 2) {
+    if (!parts[at].startsWith('R')) continue;
+    moved.set(parts[at + 1], parts[at + 2]);
+    at += 1;
+  }
+  return moved;
+}
+
 export function merged(root = process.cwd()) {
   const others = parents(root);
   if (others.length === 0) return undefined;
   const views = ['HEAD', ...others].map((parent) => git(root, [...diff, parent]));
-  if (views.includes(undefined)) return undefined;
+  const moves = others.map((parent) =>
+    git(root, [
+      'diff',
+      '--no-ext-diff',
+      '--no-relative',
+      '-M',
+      '--name-status',
+      '-z',
+      'HEAD',
+      parent,
+    ])
+  );
+  if ([...views, ...moves].includes(undefined)) return undefined;
   const [base, ...rest] = views.map(marks);
+  const moved = moves.map(renames);
   const prefix = git(root, ['rev-parse', '--show-prefix'])?.trim() ?? '';
   const files = new Set();
   let text = '';
   for (const [name, file] of base) {
+    const matches = rest.map((other, at) => other.get(name) ?? other.get(moved[at].get(name)));
     const kept = [...file.marks].filter((entry) =>
-      rest.every((other) => other.get(name)?.marks.has(entry))
+      matches.every((other) => other?.marks.has(entry))
     );
     if (kept.length === 0) continue;
-    for (const each of file.paths)
+    for (const each of [file, ...matches].flatMap((one) => one.paths))
       if (each.startsWith(prefix)) files.add(each.slice(prefix.length));
     const lines = kept.filter((entry) => entry.startsWith('+')).map((entry) => entry.slice(1));
     if (lines.length > 0)
