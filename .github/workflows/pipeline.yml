@@ -85,6 +85,11 @@ jobs:
       total: ${{ steps.shards.outputs.total }}
       review: ${{ steps.review.outputs.review }}
       bedrock: ${{ steps.bedrock.outputs.bedrock }}
+      split: ${{ steps.split.outputs.split }}
+      files: ${{ steps.split.outputs.files }}
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -107,6 +112,62 @@ jobs:
           total=$(( SHARDS > 1 ? SHARDS : 1 ))
           echo "total=$total" >> "$GITHUB_OUTPUT"
           echo "shards=$(node -p "JSON.stringify([...Array($total).keys()])")" >> "$GITHUB_OUTPUT"
+
+      - id: queued
+        if: github.event_name != 'push'
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
+        continue-on-error: true
+        with:
+          name: ^junit-
+          name_is_regexp: true
+          event: merge_group
+          workflow_conclusion: completed
+          if_no_artifact_found: ignore
+          path: ${{ runner.temp }}/junit-download
+
+      - if: github.event_name != 'push' && steps.queued.outputs.found_artifact != 'true'
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
+        continue-on-error: true
+        with:
+          name: ^junit-
+          name_is_regexp: true
+          event: pull_request
+          workflow_conclusion: completed
+          if_no_artifact_found: ignore
+          path: ${{ runner.temp }}/junit-download
+
+      - id: split
+        if: github.event_name != 'push'
+        env:
+          GLOB: ${{ inputs.test-glob }}
+          TOTAL: ${{ steps.shards.outputs.total }}
+        run: |
+          node --input-type=module <<'EOF' | tee -a "$GITHUB_OUTPUT"
+          import { globSync, readFileSync } from 'node:fs';
+          const { GLOB, TOTAL, RUNNER_TEMP } = process.env;
+          const files = globSync(GLOB, { exclude: (file) => file.includes('node_modules') }).sort();
+          const seconds = new Map();
+          for (const report of globSync(`${RUNNER_TEMP}/junit-download/**/*.xml`)) {
+            for (const [, attrs] of readFileSync(report, 'utf8').matchAll(/<testcase\b([^>]*?)\/?>/g)) {
+              const path = /\bfile="([^"]*)"/.exec(attrs)?.[1] ?? '';
+              const file = files.find((candidate) => path === candidate || path.endsWith(`/${candidate}`));
+              if (file) seconds.set(file, (seconds.get(file) ?? 0) + Number(/\btime="([^"]*)"/.exec(attrs)?.[1] ?? 0));
+            }
+          }
+          const known = [...seconds.values()];
+          const guess = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 1;
+          const weight = (file) => seconds.get(file) ?? guess;
+          const shards = Array.from({ length: Number(TOTAL) }, () => ({ load: 0, files: [] }));
+          for (const file of [...files].sort((a, b) => weight(b) - weight(a) || a.localeCompare(b))) {
+            const lightest = shards.reduce((min, shard) => (shard.load < min.load ? shard : min));
+            lightest.load += weight(file);
+            lightest.files.push(file);
+          }
+          shards.forEach((shard, i) => console.error(`shard ${i}: ${shard.files.length} files, ~${Math.round(shard.load)} s`));
+          console.error(`timings for ${seconds.size} of ${files.length} files`);
+          console.log(`split=${JSON.stringify(shards.map((shard) => shard.files.join('\n')))}`);
+          console.log(`files=${JSON.stringify(files)}`);
+          EOF
 
       - id: review
         env:
@@ -178,9 +239,6 @@ jobs:
     if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && !cancelled() && needs.lint.result == 'success' && needs.deploy.result != 'failure'
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
-    permissions:
-      contents: read
-      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -203,46 +261,11 @@ jobs:
           if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then DEPS=1; fi
           npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser ${DEPS:+--with-deps} ${CHROME:+--version "$CHROME"}
 
-      - id: queued
-        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
-        continue-on-error: true
-        with:
-          name: ^junit-
-          name_is_regexp: true
-          event: merge_group
-          workflow_conclusion: completed
-          if_no_artifact_found: ignore
-          path: ${{ runner.temp }}/junit-download
-
-      - if: steps.queued.outputs.found_artifact != 'true'
-        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
-        continue-on-error: true
-        with:
-          name: ^junit-
-          name_is_regexp: true
-          event: pull_request
-          workflow_conclusion: completed
-          if_no_artifact_found: ignore
-          path: ${{ runner.temp }}/junit-download
-
-      - name: Timings
-        run: |
-          mkdir -p "$RUNNER_TEMP/timings"
-          find "$RUNNER_TEMP/junit-download" -name '*.xml' -exec cp {} "$RUNNER_TEMP/timings/" \; 2>/dev/null || true
-
-      - id: split
-        uses: r7kamura/split-tests-by-timings@5134247c551d8fe78ee44182a8228256e2ecd43e
-        with:
-          reports: ${{ runner.temp }}/timings
-          glob: ${{ inputs.test-glob }}
-          index: ${{ matrix.shard }}
-          total: ${{ needs.lint.outputs.total }}
-
       - name: Integration tests
         env:
           TEST: ${{ inputs.test }}
           GLOB: ${{ inputs.test-glob }}
-          FILES: ${{ steps.split.outputs.paths }}
+          FILES: ${{ fromJSON(needs.lint.outputs.split)[matrix.shard] }}
           SHARD: ${{ matrix.shard }}
           EXTRA_NODE_OPTIONS: ${{ inputs.node-options }}
           STAGING_URL: ${{ needs.deploy.outputs.url }}
@@ -254,7 +277,7 @@ jobs:
             exit 1
           fi
           mkdir -p junit
-          SLICC_TEST_FILES=$(tr ' ' '\n' <<< "$FILES")
+          SLICC_TEST_FILES=$FILES
           SLICC_TEST_ALL=$(node -e 'for (const file of require("node:fs").globSync(process.argv[1])) console.log(file)' "$GLOB")
           SLICC_TEST_SHARD=$SHARD
           SLICC_TEST_JUNIT=$PWD/junit/$SHARD.xml
@@ -292,7 +315,7 @@ jobs:
           if-no-files-found: ignore
 
   integration:
-    needs: test
+    needs: [lint, test]
     if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && !cancelled()
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     steps:
@@ -309,10 +332,13 @@ jobs:
       - env:
           RESULT: ${{ needs.test.result }}
           REQUIRE: ${{ inputs.require-tests }}
+          FILES: ${{ needs.lint.outputs.files }}
         run: |
           node --input-type=module <<'EOF'
           import { globSync, readFileSync } from 'node:fs';
-          const { RESULT, REQUIRE } = process.env;
+          const { RESULT, REQUIRE, FILES } = process.env;
+          const files = REQUIRE === 'true' ? JSON.parse(FILES || '[]') : [];
+          const shards = new Map(files.map((file) => [file, new Set()]));
           const reports = globSync('junit/**/*.xml');
           let tests = 0;
           let skipped = 0;
@@ -321,6 +347,9 @@ jobs:
             const xml = readFileSync(report, 'utf8');
             for (const [, attrs, body = ''] of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
               if (/file="[^"]*\/slicc-shared-web\/unit\/none\.mjs"/.test(attrs)) continue;
+              const path = /\bfile="([^"]*)"/.exec(attrs)?.[1] ?? '';
+              const file = files.find((candidate) => path === candidate || path.endsWith(`/${candidate}`));
+              if (file) shards.get(file).add(report.split('/')[1]);
               if (/<skipped\b/.test(body)) {
                 skipped += 1;
                 continue;
@@ -329,10 +358,16 @@ jobs:
               if (/<(failure|error)\b/.test(body)) failed += 1;
             }
           }
+          const missing = files.filter((file) => shards.get(file).size === 0);
+          const twice = files.filter((file) => shards.get(file).size > 1);
+          for (const file of missing) console.log(`::error title=Integration::${file} matches test-glob but ran on no shard`);
+          for (const file of twice) console.log(`::error title=Integration::${file} ran on ${[...shards.get(file)].join(', ')}`);
           const why =
             RESULT !== 'success' ? `the test job ended with ${RESULT}`
             : failed > 0 ? `${failed} of ${tests} tests failed`
             : tests === 0 && REQUIRE === 'true' ? 'no test ran (a repo without node tests sets require-tests: false)'
+            : missing.length > 0 ? `${missing.length} test-glob files ran on no shard`
+            : twice.length > 0 ? `${twice.length} test-glob files ran on more than one shard`
             : '';
           const ran = `${tests} tests${skipped ? ` (${skipped} skipped)` : ''} in ${reports.length} JUnit reports`;
           console.log(why ? `integration: FAIL ${why} (${ran})` : `integration: PASS ${ran}`);
@@ -731,7 +766,15 @@ jobs:
               }
               await post(`repos/${target}/issues`, { title: issue.title, body: `${issue.body}\n\nFrom ${agent}'s review of ${repo}#${PR}.` }, token)
                 .then((created) => console.log(created.html_url))
-                .catch((error) => { console.error(error.message); failed = true; });
+                .catch(async (error) => {
+                  console.error(error.message);
+                  if (target === repo) {
+                    failed = true;
+                    return;
+                  }
+                  const note = `**${agent}** wanted to open an issue in ${target} but couldn't (${ISSUES_TOKEN ? 'SLICC_ISSUES_TOKEN was refused' : 'no SLICC_ISSUES_TOKEN'}):\n\n### ${issue.title}\n\n${issue.body}`;
+                  await once(note, () => post(`repos/${repo}/issues/${PR}/comments`, { body: note }));
+                });
             }
           }
           process.exit(failed ? 1 : 0);
