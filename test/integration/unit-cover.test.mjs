@@ -651,3 +651,30 @@ test('a selection that runs past SLICC_UNIT_BATCH_TIMEOUT is killed, process gro
   const left = spawnSync('pgrep', ['-f', join(dir, 'node_modules')], { encoding: 'utf8' });
   assert.equal(left.stdout, '', 'nothing of the batch is left running');
 });
+
+test('a leaked child process holding the runner output open is ended by the batch limit, and the FAIL names its handle', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/a.test.mjs': unit(
+      'a',
+      "import { spawn } from 'node:child_process';\nimport { a } from '../../src/a.mjs';\na(1);\ntest('child', () => {\n  spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });\n});"
+    ),
+  });
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const run = await bounded(
+    dir,
+    { SLICC_UNIT_TIMEOUT: '1000', SLICC_UNIT_BATCH_TIMEOUT: '10000' },
+    45_000
+  );
+  assert.equal(run.signal, null, 'the hook hung on the child process');
+  assert.notEqual(run.status, 0);
+  const [line] = verdicts(run);
+  assert.match(
+    line,
+    /^slicc-unit-cover: FAIL the unit tests ran past 10000ms and were killed \(test\/unit\/a\.test\.mjs\): test\/unit\/a\.test\.mjs was still running 1000ms after its tests ended, open handles kept it alive \(.*ProcessWrap.*\)$/
+  );
+  const left = spawnSync('pgrep', ['-f', 'setInterval\\(\\(\\) => \\{\\}, 1000\\)'], {
+    encoding: 'utf8',
+  });
+  assert.equal(left.stdout, '', 'the leaked child is gone');
+});
