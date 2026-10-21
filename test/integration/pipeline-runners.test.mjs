@@ -117,3 +117,20 @@ test('a review gets review-timeout-minutes and review-screenshots, 60 and 30 by 
   assert.match(text, /review-screenshots:\n {8}type: number\n {8}default: 30/);
   assert.match(jobs().reviewer.join('\n'), /at most \$SHOTS files/);
 });
+
+test('context takes the diff from git and survives an API quota running out', () => {
+  const context = jobs().context.join('\n');
+  assert.match(context, /git diff "\$BASE\.\.\.\$HEAD"/);
+  assert.doesNotMatch(context, /gh (pr|issue) /);
+  assert.match(context, /missing\.txt/);
+  assert.doesNotMatch(text, /search_artifacts: true/);
+});
+
+test('timings come from the latest merge queue run, else the latest pull request run', () => {
+  const test = jobs().test.join('\n');
+  assert.match(test, /id: queued[\s\S]*?event: merge_group/);
+  assert.match(
+    test,
+    /if: steps\.queued\.outputs\.found_artifact != 'true'[\s\S]*?event: pull_request/
+  );
+});
