@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { commitAll, initFixtureRepo } from '@ai-ecoverse/slicc-shared-web/testing';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const dirs = [];
@@ -88,9 +89,8 @@ async function fixture(config = snippet) {
       });
     }
   }
-  ok(main, 'init', '-q');
-  ok(main, 'add', '-A');
-  ok(main, 'commit', '-qm', 'init', '--no-verify');
+  initFixtureRepo(main);
+  commitAll(main, 'init');
   const install = spawnSync(
     process.execPath,
     [join(main, 'node_modules', 'lefthook', 'bin', 'index.js'), 'install'],

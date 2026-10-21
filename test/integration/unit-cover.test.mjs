@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { commitAll, initFixtureRepo } from '@ai-ecoverse/slicc-shared-web/testing';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const bin = join(repo, 'bin', 'slicc-unit-cover.mjs');
@@ -77,9 +78,8 @@ async function fixture(files, extra = {}) {
   const cover = join(dir, 'node_modules', '.bin', 'slicc-diff-cover');
   writeFileSync(cover, '#!/bin/sh\ncp coverage/unit/lcov.info covered.txt\n');
   chmodSync(cover, 0o755);
-  git(dir, 'init', '-q');
-  git(dir, 'add', '-A');
-  git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init', '--no-verify');
+  initFixtureRepo(dir);
+  commitAll(dir, 'init');
   return dir;
 }
 
@@ -325,7 +325,7 @@ test('TypeScript: tsconfig paths resolve from JSONC, type-only imports do not co
   assert.deepEqual(viaAlias.ran, ['main']);
   assert.match(record(viaAlias.covered, 'src/lib/math.ts'), /^LH:[1-9]/m);
   rmSync(join(dir, 'ran.txt'));
-  git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'math', '--no-verify');
+  git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'math');
   change(dir, {
     'src/shapes.ts':
       'export interface Shape {\n  side: number;\n}\nexport const unit: Shape = { side: 2 };\n',
@@ -418,7 +418,7 @@ test('a test that imports names from a barrel, statically or by destructuring an
     const run = cover(dir);
     assert.equal(run.status, 0, run.stderr);
     assert.deepEqual(run.ran, ran, file);
-    git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', file, '--no-verify');
+    git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', file);
   }
 });
 

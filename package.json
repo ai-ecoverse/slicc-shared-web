@@ -29,7 +29,8 @@
     "./mcr.config.mjs": "./mcr.config.mjs",
     "./harness": "./harness/index.mjs",
     "./harness/global": "./harness/global.mjs",
-    "./pnpmfile.mjs": "./pnpmfile.mjs"
+    "./pnpmfile.mjs": "./pnpmfile.mjs",
+    "./testing": "./testing/index.mjs"
   },
   "bin": {
     "slicc-agents-md": "bin/slicc-agents-md.sh",
@@ -51,6 +52,7 @@
     "mcr.config.mjs",
     "tsconfig.json",
     "pnpmfile.mjs",
+    "testing",
     "unit"
   ],
   "scripts": {
