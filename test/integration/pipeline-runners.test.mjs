@@ -48,11 +48,10 @@ test('reviewers start only when the repo can read the Bedrock secret', () => {
   assert.match(jobs().review.join('\n'), /AWS_BEARER_TOKEN_BEDROCK isn't available to this repo/);
 });
 
-test("this repo's own CI keeps a fork's pull request off the pool too", () => {
+test("this repo's own CI is only the pipeline caller, so a fork's pull request stays off the pool", () => {
   const ci = readFileSync(`${root}/.github/workflows/ci.yml`, 'utf8');
-  const runners = [...ci.matchAll(/^ {4}runs-on:\s*(.+?)\s*$/gm)].map((m) => m[1]);
-  assert.ok(runners.length >= 2, runners.join());
-  for (const runner of runners) assert.equal(runner, `\${{ ${fork} || 'cloud-run-job' }}`);
+  assert.doesNotMatch(ci, /^ {4}runs-on:/m);
+  assert.match(ci, /uses: \.\/\.github\/workflows\/pipeline\.yml/);
 });
 
 test('release runs in release-environment, and after-release only when a new tag points at the commit', () => {
