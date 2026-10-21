@@ -700,3 +700,21 @@ test('a leaked child that does not hold the runner open is killed with the batch
   });
   assert.equal(left.stdout, '', 'the leaked child is gone');
 });
+
+test('a SLICC_UNIT_TIMEOUT or SLICC_UNIT_BATCH_TIMEOUT that is not a whole number of milliseconds fails the hook before any test runs', async () => {
+  const dir = await fixture(js);
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  for (const [name, value] of [
+    ['SLICC_UNIT_TIMEOUT', '60s'],
+    ['SLICC_UNIT_TIMEOUT', ''],
+    ['SLICC_UNIT_BATCH_TIMEOUT', '1m'],
+    ['SLICC_UNIT_BATCH_TIMEOUT', '-1'],
+  ]) {
+    const run = cover(dir, { [name]: value });
+    assert.equal(run.status, 1, `${name}=${value}`);
+    assert.deepEqual(verdicts(run), [
+      `slicc-unit-cover: FAIL ${name} must be a whole number of milliseconds, 0 for none, not ${JSON.stringify(value)}`,
+    ]);
+    assert.deepEqual(run.ran, []);
+  }
+});
