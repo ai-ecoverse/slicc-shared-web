@@ -232,3 +232,19 @@ test('a conflict resolution that drops a line both sides had runs the unit tests
     /slicc-unit-cover: PASS 1 unit test files in 1 batch, diff coverage 100%/
   );
 });
+
+test('deleting during a merge a file the other side renamed runs the unit tests', async () => {
+  const fx = await fixture();
+  save(fx.dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' }, 'side');
+  git(fx.dir, ['switch', '-q', fx.main]);
+  write(fx.dir, { 'src/n.mjs': "export const m = () => 'm';\n" });
+  git(fx.dir, ['rm', '-q', '--', 'src/m.mjs']);
+  git(fx.dir, ['add', '--', 'src/n.mjs']);
+  commit(fx.dir, 'rename');
+  git(fx.dir, ['switch', '-q', 'side']);
+  git(fx.dir, ['merge', '-q', '--no-ff', '--no-commit', fx.main]);
+  git(fx.dir, ['rm', '-q', '-f', '--', 'src/n.mjs']);
+  const removed = cover(fx);
+  assert.doesNotMatch(removed.stdout, /no code staged/);
+  assert.match(removed.stderr, /running 1 of 1 unit test files/);
+});
