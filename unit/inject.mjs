@@ -1,9 +1,11 @@
 import { fileURLToPath } from 'node:url';
 
 export const preload = fileURLToPath(new URL('select.cjs', import.meta.url));
+export const loader = new URL('transform.mjs', import.meta.url).href;
 
 export function inject(options = process.env.NODE_OPTIONS ?? '') {
-  if (options.includes(preload)) return options;
   const flag = `--require ${/\s/.test(preload) ? `"${preload}"` : preload}`;
-  return options ? `${options} ${flag}` : flag;
+  const flags = [options.includes(preload) ? '' : flag];
+  if (!options.includes(loader)) flags.push(`--import ${loader}`);
+  return [options, ...flags].filter(Boolean).join(' ');
 }

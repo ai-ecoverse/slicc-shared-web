@@ -86,6 +86,7 @@
     }
   },
   "dependencies": {
-    "acorn": "8.19.0"
+    "acorn": "8.19.0",
+    "amaro": "1.2.2"
   }
 }
