@@ -315,3 +315,16 @@ test('a staged copy of a source file is diff-covered, whatever diff.renames says
   assert.equal(copied.status, 1, copied.stdout + copied.stderr);
   assert.match(copied.stdout, /^src\/c\.mjs \([\d.]+%\): Missing lines 1$/m);
 });
+
+test('in a merge, a file whose quoted name keeps raw non-ASCII characters selects its unit tests', async () => {
+  const fx = await fixture();
+  write(fx.dir, { 'test/unit/tab.test.mjs': "import '../../src/é\\t.mjs';\n" });
+  save(fx.dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' }, 'side');
+  git(fx.dir, ['switch', '-q', fx.main]);
+  save(fx.dir, { 'src/m.mjs': `export const m = () => 'm';\n${uncovered('main')}` }, 'main');
+  git(fx.dir, ['switch', '-q', 'side']);
+  git(fx.dir, ['merge', '-q', '--no-ff', '--no-commit', fx.main]);
+  stage(fx.dir, { 'src/é\t.mjs': 'export const t = 1;\n' });
+  const own = cover(fx);
+  assert.match(own.stderr, /running 1 of 2 unit test files/);
+});
