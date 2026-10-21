@@ -24,7 +24,7 @@ async function lint(files) {
   const cache = join(repo, 'node_modules', '.cache');
   if (existsSync(cache)) cpSync(cache, join(dir, 'node_modules', '.cache'), { recursive: true });
   spawnSync('git', ['init', '-q'], { cwd: dir });
-  spawnSync('git', ['add', '-A'], { cwd: dir });
+  spawnSync('git', ['add', '-A', '--', ':/'], { cwd: dir });
   return spawnSync('sh', [bin], { cwd: dir, encoding: 'utf8' });
 }
 

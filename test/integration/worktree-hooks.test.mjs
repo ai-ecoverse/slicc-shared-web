@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { commitAll, initFixtureRepo } from '@ai-ecoverse/slicc-shared-web/testing';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const installer = join(
@@ -120,11 +121,10 @@ function repoWithShims(main) {
   writeFileSync(join(main, '.gitignore'), 'node_modules/\n');
   writeFileSync(join(main, 'lefthook.yml'), config);
   writeFileSync(join(main, 'README.md'), '# fixture\n');
-  ok(main, 'init', '-q');
+  initFixtureRepo(main);
   modules(main);
   install(main);
-  ok(main, 'add', '-A');
-  ok(main, 'commit', '-qm', 'init', '--no-verify');
+  commitAll(main, 'init');
 }
 
 function fixture() {
@@ -312,9 +312,8 @@ test('a worktree set up by the old per-worktree installer drops its absolute cor
   writeFileSync(join(main, '.gitignore'), 'node_modules/\n');
   writeFileSync(join(main, 'lefthook.yml'), config);
   writeFileSync(join(main, 'README.md'), '# fixture\n');
-  ok(main, 'init', '-q');
-  ok(main, 'add', '-A');
-  ok(main, 'commit', '-qm', 'init', '--no-verify');
+  initFixtureRepo(main);
+  commitAll(main, 'init');
   const a = join(base, 'a');
   const b = join(base, 'b');
   ok(main, 'worktree', 'add', '-q', '-b', 'a', a);
