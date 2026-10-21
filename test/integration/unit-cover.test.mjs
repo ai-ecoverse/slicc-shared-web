@@ -536,9 +536,42 @@ test('a unit test that leaves a server listening ends the hook with a FAIL namin
   assert.equal(run.signal, null, 'the hook hung on the open server');
   assert.notEqual(run.status, 0);
   assert.deepEqual(verdicts(run), [
-    'slicc-unit-cover: FAIL the unit tests failed (status 1): test/unit/a.test.mjs was force-exited after its tests, open handles kept it alive (TCPServerWrap)',
+    'slicc-unit-cover: FAIL the unit tests failed (status 1): test/unit/a.test.mjs was still running 3000ms after its tests, open handles kept it alive (TCPServerWrap)',
   ]);
   assert.equal(run.covered, undefined);
+});
+
+test('a unit test that closes the server it started passes', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/a.test.mjs': unit(
+      'a',
+      "import { createServer } from 'node:http';\nimport { a } from '../../src/a.mjs';\na(1);\ntest('listens and closes', async () => {\n  const server = createServer();\n  await new Promise((done) => server.listen(0, done));\n  await new Promise((done) => server.close(done));\n});"
+    ),
+  });
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const run = await bounded(dir, {}, 45_000);
+  assert.equal(run.status, 0, run.stdout);
+  assert.deepEqual(verdicts(run), [
+    'slicc-unit-cover: PASS 1 unit test files in 1 batch, diff coverage 100%',
+  ]);
+});
+
+test('a unit test file that hangs outside any test is killed and the FAIL names it', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/a.test.mjs': unit(
+      'a',
+      "import { a } from '../../src/a.mjs';\na(1);\nawait new Promise(() => setInterval(() => {}, 1000));"
+    ),
+  });
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const run = await bounded(dir, { SLICC_UNIT_TIMEOUT: '1000' }, 45_000);
+  assert.equal(run.signal, null, 'the hook hung on the file');
+  assert.notEqual(run.status, 0);
+  assert.deepEqual(verdicts(run), [
+    'slicc-unit-cover: FAIL the unit tests failed (status 1): test/unit/a.test.mjs was killed after 6000ms without a test starting or ending (a hang outside any test, or a blocked event loop)',
+  ]);
 });
 
 test('a unit test that never resolves times out after SLICC_UNIT_TIMEOUT and the FAIL names it', async () => {
