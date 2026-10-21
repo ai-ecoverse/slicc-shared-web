@@ -34,8 +34,21 @@ const which = (command) =>
 
 const path = mkdtempSync(join(tmpdir(), 'slicc-worktree-hooks-bin-'));
 dirs.push(path);
-const linked = new Set();
-for (const dir of new Set([process.execPath, which('git'), which('sh')].map(dirname))) {
+const tools = ['git', 'sh', 'sed', 'tr', 'uname', 'grep'].map(which);
+writeFileSync(
+  join(path, 'git'),
+  [
+    '#!/bin/sh',
+    `case "$(env | grep -E '^GIT_CONFIG_(KEY_[0-9]+|PARAMETERS)=' | tr '[:upper:]' '[:lower:]')" in`,
+    '  *core.hookspath*) echo "git: overriding core.hooksPath from the environment is refused" >&2; exit 1 ;;',
+    'esac',
+    `exec '${tools[0]}' "$@"`,
+    '',
+  ].join('\n'),
+  { mode: 0o755 }
+);
+const linked = new Set(['git']);
+for (const dir of new Set([process.execPath, ...tools].map(dirname))) {
   for (const name of readdirSync(dir)) {
     if (!name.startsWith('lefthook') && !linked.has(name)) {
       linked.add(name);
@@ -143,6 +156,8 @@ function ranWith(run, own, others) {
   assert.equal(run.status, 0, run.output);
   assert.match(run.output, /worktree-hook-ran/);
   assert.ok(run.output.includes(join(own, 'node_modules', 'lefthook-')), run.output);
+  assert.doesNotMatch(run.output, /core\.hooksPath is set|sync hooks/);
+  assert.equal(ok(own, 'status', '--porcelain', '.githooks'), '');
   for (const other of others) {
     assert.ok(!run.output.includes(join(other, 'node_modules')), run.output);
   }
@@ -202,7 +217,7 @@ test('a fresh worktree without npm install fails the commit with run npm install
   ranWith(commit(b, 'b'), b, [a, main]);
   for (const dir of [main, a, b]) {
     const hook = readFileSync(join(dir, 'node_modules', '.git-hooks', 'pre-commit'), 'utf8');
-    assert.ok(hook.includes(join(dir, 'node_modules')), dir);
+    assert.ok(!hook.includes(dir), dir);
   }
 
   ok(main, 'worktree', 'remove', '--force', b);
@@ -243,14 +258,22 @@ test('an existing shim is never overwritten, and every configured hook gets one'
   const shim = join(main, '.githooks', 'pre-commit');
   const custom = '#!/bin/sh\necho custom-shim\nexit 0\n';
   writeFileSync(shim, custom);
+  writeFileSync(join(main, 'extra.yml'), 'post-merge:\n  jobs:\n    - run: echo merged\n');
   writeFileSync(
     join(main, 'lefthook.yml'),
-    `${config}pre-push:\n  jobs:\n    - run: echo push\ncommit-msg:\n  jobs:\n    - run: echo msg\n`
+    `extends:\n  - extra.yml\n${config}pre-push:\n  jobs:\n    - run: echo push\ncommit-msg:\n  jobs:\n    - run: grep -q needle {1} && echo commit-msg-saw-it\nlint:\n  jobs:\n    - run: echo lint\n`
   );
   install(main);
   assert.equal(readFileSync(shim, 'utf8'), custom);
   assert.deepEqual(readdirSync(join(main, '.githooks')).sort(), [
     'commit-msg',
+    'post-merge',
+    'pre-commit',
+    'pre-push',
+  ]);
+  assert.deepEqual(readdirSync(join(main, 'node_modules', '.git-hooks')).sort(), [
+    'commit-msg',
+    'post-merge',
     'pre-commit',
     'pre-push',
   ]);
@@ -258,7 +281,25 @@ test('an existing shim is never overwritten, and every configured hook gets one'
     readFileSync(join(main, '.githooks', 'pre-push'), 'utf8'),
     readFileSync(join(main, '.githooks', 'commit-msg'), 'utf8')
   );
-  assert.ok(existsSync(join(main, 'node_modules', '.git-hooks', 'pre-push')));
+  const run = commit(main, 'the needle');
+  assert.equal(run.status, 0, run.output);
+  assert.match(run.output, /custom-shim/);
+  assert.match(run.output, /commit-msg-saw-it/);
+});
+
+test('without a top-level platform binary, as under pnpm, the hook runs node_modules/.bin/lefthook, and without either it asks for npm install', () => {
+  const { main } = fixture();
+  const platform = readdirSync(join(main, 'node_modules')).find((n) => n.startsWith('lefthook-'));
+  const nested = join(main, 'node_modules', 'lefthook', 'node_modules');
+  mkdirSync(nested);
+  cpSync(join(main, 'node_modules', platform), join(nested, platform), { recursive: true });
+  rmSync(join(main, 'node_modules', platform), { recursive: true });
+  const run = commit(main, 'through .bin');
+  assert.equal(run.status, 0, run.output);
+  assert.match(run.output, /worktree-hook-ran/);
+  assert.ok(run.output.includes(join(main, 'node_modules', '.bin', 'lefthook')), run.output);
+  rmSync(join(main, 'node_modules', '.bin'), { recursive: true });
+  refused(commit(main, 'no lefthook'), main, 'through .bin');
 });
 
 test('lefthook postinstall writes no hook anywhere once core.hooksPath is set', () => {
