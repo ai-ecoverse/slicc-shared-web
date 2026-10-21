@@ -297,11 +297,16 @@ jobs:
           const { RESULT, REQUIRE } = process.env;
           const reports = globSync('junit/**/*.xml');
           let tests = 0;
+          let skipped = 0;
           let failed = 0;
           for (const report of reports) {
             const xml = readFileSync(report, 'utf8');
             for (const [, attrs, body = ''] of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
               if (/file="[^"]*\/slicc-shared-web\/unit\/none\.mjs"/.test(attrs)) continue;
+              if (/<skipped\b/.test(body)) {
+                skipped += 1;
+                continue;
+              }
               tests += 1;
               if (/<(failure|error)\b/.test(body)) failed += 1;
             }
@@ -309,9 +314,10 @@ jobs:
           const why =
             RESULT !== 'success' ? `the test job ended with ${RESULT}`
             : failed > 0 ? `${failed} of ${tests} tests failed`
-            : tests === 0 && REQUIRE === 'true' ? `no test ran: ${reports.length} JUnit reports name no test (set require-tests: false for a repo without node tests)`
+            : tests === 0 && REQUIRE === 'true' ? 'no test ran (a repo without node tests sets require-tests: false)'
             : '';
-          console.log(why ? `integration: FAIL ${why}` : `integration: PASS ${tests} tests in ${reports.length} JUnit reports`);
+          const ran = `${tests} tests${skipped ? ` (${skipped} skipped)` : ''} in ${reports.length} JUnit reports`;
+          console.log(why ? `integration: FAIL ${why} (${ran})` : `integration: PASS ${ran}`);
           process.exit(why ? 1 : 0);
           EOF
 
