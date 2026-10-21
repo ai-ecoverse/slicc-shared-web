@@ -5,7 +5,7 @@ Configuration shared by SLICC's web repos ([slicc-bios](https://github.com/ai-ec
 | File | What it is | How a repo uses it |
 |---|---|---|
 | `default.json` | Root Renovate preset: automerge on, one dependency per PR, exact pins, 7-day release age (14 for majors, 0 for vulnerability fixes and for our own `@ai-ecoverse` packages and `github.com/ai-ecoverse/*` Go modules, which also jump the PR queue), `<upstream>-<build>` versions of our own `@ai-ecoverse` packages, such as `9.12.0-6`, which Renovate would otherwise skip as prereleases, never past the npm `latest` dist-tag (only `<upstream>-slicc.<n>` ones for `@ai-ecoverse/fnox` and its `@ai-ecoverse/fnox-*` platform packages), one PR each, majors included, for the certified pairs `@ai-ecoverse/slicc-kernel` + `@ai-ecoverse/wasi-pnpm` ("kernel and pnpm") and `@ai-ecoverse/wasm-coreutils` + `@ai-ecoverse/wasm-procps` ("coreutils and procps"), `go mod tidy` after every Go module update (plus import-path rewrites on majors), a manager for jsDelivr pins inside `src/`, and one for [`# renovate:` annotated pins in workflow files](#versions-pinned-in-workflow-files) | `renovate.json`: `{ "extends": ["github>ai-ecoverse/slicc-shared-web"] }` |
-| `.github/workflows/pipeline.yml` | The one reusable workflow, described [below](#pipeline): lint on every event; on pull requests and in the merge queue a staging deploy (if any) and sharded integration tests; on pull requests a Claude and a Codex review; on `main` a release | `jobs: { ci: { uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@vX.Y.Z, secrets: inherit } }` |
+| `.github/workflows/pipeline.yml` | The one reusable workflow, described [below](#pipeline): lint on every event; on pull requests a staging deploy (if any); on pull requests and in the merge queue sharded integration tests; on pull requests a Claude and a Codex review; on `main` a release | `jobs: { ci: { uses: ai-ecoverse/slicc-shared-web/.github/workflows/pipeline.yml@vX.Y.Z, secrets: inherit } }` |
 | `biome.json` | Formatter settings and slicc's strict linter: cognitive complexity ≤ 25, functions ≤ 150 lines, no unused variables or imports, no floating or misused promises, naming conventions, `import type`/`export type`. Test files under `test/` get slicc's test exemptions | `biome.json`: `{ "extends": ["@ai-ecoverse/slicc-shared-web/biome"] }` |
 | `tsconfig.json` | TypeScript base for Node's type stripping | `tsconfig.json`: `{ "extends": "@ai-ecoverse/slicc-shared-web/tsconfig.json", "include": ["src/**/*.ts"] }` |
 | `lefthook.yml` | Pre-commit hooks: Biome, typecheck, no comments, no unit tests in git, AGENTS.md, and diff coverage over [only the unit tests the change reaches](#which-unit-tests-a-commit-runs) | `lefthook.yml`: the [fail-closed snippet below](#hooks-that-fail-closed), and `prepare`: `slicc-install-hooks` plus the committed `.githooks/` it writes ([one hooks directory per worktree](#one-hooks-directory-per-worktree)) |
@@ -66,7 +66,7 @@ The caller cancels superseded runs on pull requests only, so a push to `main` ne
 
 **Lint** fails the run, and nothing after it starts.
 
-**Deploy** runs the `deploy` command with every secret the caller passes as an environment variable, except the pipeline's own `AWS_BEARER_TOKEN_BEDROCK`, `SLICC_ISSUES_TOKEN` and `github_token`. The command writes `url=<staging URL>` to `$GITHUB_OUTPUT`; the tests and the reviewers get it as `STAGING_URL`. With `deploy-secrets`, a newline- or space-separated list of secret names, only those of them are exported.
+**Deploy** runs on pull requests only, never in the merge queue, with `id-token: write` for an OIDC-authenticated deploy. The merge queue's tests therefore run without `STAGING_URL`: a test that needs it skips when it's empty. It runs the `deploy` command with every secret the caller passes as an environment variable, except the pipeline's own `AWS_BEARER_TOKEN_BEDROCK`, `SLICC_ISSUES_TOKEN` and `github_token`. The command writes `url=<staging URL>` to `$GITHUB_OUTPUT`; the tests and the reviewers get it as `STAGING_URL`. With `deploy-secrets`, a newline- or space-separated list of secret names, only those of them are exported.
 
 **Integration tests** install Chrome for Testing with `slicc-cdp install-browser` (with `--with-deps` where the runner has root or passwordless sudo) (`--version` from the `chrome` input, stable without it), then split the files matching `test-glob` across `shards` jobs by their timings, with [split-tests-by-timings](https://github.com/marketplace/actions/split-tests-by-timings). The timings are the JUnit reports of the latest completed run of the same workflow; without one, the split is by count. Each shard runs the repo's own `test` command unchanged: `harness/shard.cjs`, preloaded through `NODE_OPTIONS`, makes the outermost `node --test` run only the shard's files that its own patterns match, writes `junit/<shard>.xml` next to the usual spec output, and then takes itself out of the environment, so a `node --test` that a test starts runs as it would without it. Files a `node --test` call would run that are not in `test-glob` (unit tests, say, whether in the same call or another) run on shard 0 only, so nothing is dropped; when `test-glob` matches nothing, shard 0 runs the command unchanged and the others run nothing. Each call keeps its own JUnit report (`junit/<shard>-<pid>.xml` for all but the last). Each shard uploads `coverage/`, `artifacts/` and `junit/` as `integration-<shard>`. `integration` passes only when every shard did, so it is the one check to require, under the caller's job name (`ci / integration`). A suite whose last step reads every test's artifacts, as this repo's `verify.mjs` does, sets `shards: 1`.
 
@@ -91,9 +91,9 @@ Each reviewer answers with `findings.json`, held to one JSON schema:
 
 **Post** is the only job that writes to GitHub. Per reviewer it sets the commit status `review / claude` or `review / codex` (`success` for `approved`, `failure` for `denied`, `error` without findings), keeps one comment with its latest verdict and summary on the pull request (edited on each run), posts each comment on its line (or, for a line outside the diff, as a pull request comment naming it) unless the same comment is already there, and opens each issue unless one with the same title is already open. An issue in another repo of the same org needs `SLICC_ISSUES_TOKEN`, a token that can open issues there; one outside the org is logged and skipped.
 
-**Release** runs `semantic-release` after lint, without any test: what reached `main` went through the merge queue. GitHub sometimes rejects a push right after the tag push with a bare `(failed)`, most often semantic-release's push of `refs/notes/semantic-release-vX.Y.Z`, so the step puts a small `git` wrapper first on `PATH`: it retries `git push` and `git fetch` up to five times, 5, 10, 15 and 20 seconds apart, and runs every other git command once, as well as semantic-release's `git fetch --unshallow`, which fails on the job's full clone by design before semantic-release falls back to a plain fetch. When the push still fails, semantic-release fails before it publishes.
+**Release** runs `semantic-release` after lint, without any test: what reached `main` went through the merge queue. GitHub sometimes rejects a push right after the tag push with a bare `(failed)`, most often semantic-release's push of `refs/notes/semantic-release-vX.Y.Z`, so the step puts a small `git` wrapper first on `PATH`: it retries `git push` and `git fetch` up to five times, 5, 10, 15 and 20 seconds apart, and runs every other git command once, as well as semantic-release's `git fetch --unshallow`, which fails on the job's full clone by design before semantic-release falls back to a plain fetch. When the push still fails, semantic-release fails before it publishes. With `release-environment`, the job runs in that GitHub environment, and `after-release` is a command run after semantic-release when it released, that is when a new `v*` tag points at the commit, with that version as `RELEASE_VERSION` (a production deploy, say). It gets the job's OIDC token and no secrets.
 
-**Review** is the check that stands for the reviews. On a pull request that gets a review it passes when both reviewers' `findings.json` say `approved`. On one that doesn't (a Renovate pull request outside `review-renovate`) it passes when `integration` did. In the merge queue it always passes, since the pull request was reviewed already. Require it next to `ci / integration`, as `ci / review`.
+**Review** is the check that stands for the reviews. On a pull request that gets a review it passes when both reviewers' `findings.json` say `approved`; when the repo can't read `AWS_BEARER_TOKEN_BEDROCK`, the reviewers don't start and it fails, naming the secret. On one that doesn't (a Renovate pull request outside `review-renovate`) it passes when `integration` did. In the merge queue it always passes, since the pull request was reviewed already. Require it next to `ci / integration`, as `ci / review`.
 
 ### Which pull requests get a review
 
@@ -111,11 +111,11 @@ Every pull request does, except Renovate's: one opened by `renovate[bot]` from a
 | Input | Default | |
 |---|---|---|
 | `node-version` | `24` | |
-| `runs-on` | `ubuntu-latest` | every job but `integration`, `context`, `post` and `review` |
+| `runs-on` | `cloud-run-job` | every job but `release`, which runs on `ubuntu-latest` because npm's trusted publishing takes OIDC tokens only from GitHub-hosted runners; a fork's pull request runs on `ubuntu-latest` too, so fork code never reaches the pool |
 | `timeout-minutes` | `20` | `lint`, `deploy`, each shard and `release`; a review gets 60 |
 | `lint` | `npm run lint` | |
 | `chrome` | stable | a Chrome for Testing version for `slicc-cdp install-browser` |
-| `test` | `npm test` | runs on Xvfb display `:99` when the runner has no `DISPLAY` |
+| `test` | `npm test` | runs on Xvfb display `:99` when the runner has no `DISPLAY`; Xvfb is installed where the runner has root or sudo, and the step fails naming the runner when it has neither Xvfb nor root |
 | `test-glob` | `test/integration/**/*.test.mjs` | the files to split; their paths can't contain spaces |
 | `shards` | `4` | below 1 counts as 1 |
 | `deploy` | none | a command that deploys to staging |
@@ -123,6 +123,8 @@ Every pull request does, except Renovate's: one opened by `renovate[bot]` from a
 | `review-browser` | `npm run --if-present review:browser` | |
 | `review-prompt` | none | |
 | `review-renovate` | none | globs of Renovate group slugs whose pull requests get a review |
+| `release-environment` | none | the GitHub environment the release job runs in |
+| `after-release` | none | a command run after semantic-release, with `RELEASE_VERSION` |
 
 | Secret | Used by |
 |---|---|
@@ -132,7 +134,7 @@ Every pull request does, except Renovate's: one opened by `renovate[bot]` from a
 
 Pull requests from forks are not supported: GitHub gives them no secrets, so the reviewers can't run and `ci / review` stays red. A maintainer opens the change again from a branch in the repo.
 
-The reviewers run the pull request's code (`npm ci`, `review-browser`) in the job that then hands the Bedrock token to the agents, so a pull request's code can read the token. That is accepted: a branch in the repo needs write access, and forks get no token.
+The reviewers run the pull request's code (`npm ci`, `review-browser`) in the job that then hands the Bedrock token to the agents, so a pull request's code can read the token. That is accepted: a branch in the repo needs write access, and forks get no token. On the pool, Codex runs with codex-action's `unsafe` safety strategy, since its containers have no sudo to drop. That rests on each job getting a fresh container that can reach no more than a GitHub-hosted runner can; a change to the pool image or its network has to keep it so.
 
 Coming from `node-ci.yml` and `node-release.yml`, both removed with `.github/actions/cert-self-guard`:
 
@@ -257,7 +259,7 @@ SLICC_UNIT_ALL=1 git commit
 
 CPU profiling is off by default. V8's sampler interrupts each page and worker thread every 100 µs with a signal, and the renderer SIGSEGVs in slicc-bios#114 all fault inside a signal handler walking the interrupted thread's frames, which points at it. Turn it on with `profile: true` or `SLICC_PROFILE=1` to get one CPU profile per target and snapshot in the test's artifact directory, and the 15 frames with the most self time in the repo's own scripts in `hotspots.md`. Without it, `hotspots.md` says that profiling is off.
 
-`monocart-coverage-reports` is a peer dependency (2.13 or later, 3.x included); pin it in the repo's `devDependencies`. The harness works with both majors: 3.x's `/util` entry has only a named `Util` export and 2.x's a default one, and CI runs the recorder and the unit-cover hook on 2.13.2 and the latest 3.x. The browser is the first of these:
+`monocart-coverage-reports` is a peer dependency (2.13 or later, 3.x included); pin it in the repo's `devDependencies`. The harness handles both majors: 3.x's `/util` entry has only a named `Util` export and 2.x's a default one. CI tests only the pinned 2.13.2, so 3.x support is unverified. The browser is the first of these:
 - `launch({ executable })`;
 - `$CHROME_PATH`;
 - `findBrowser()` from `@ai-ecoverse/slicc-cdp`. It finds a Chrome for Testing that `npx slicc-cdp install-browser --version <x.y.z.w>` installed, or a system Chrome;

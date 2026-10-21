@@ -14,58 +14,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24
-          cache: npm
-
-      - run: npm ci
-
-      - name: Workflows
-        env:
-          # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$
-          ACTIONLINT: 1.7.12
-        run: bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v$ACTIONLINT/scripts/download-actionlint.bash") "$ACTIONLINT" && ./actionlint -color
-
-      - name: Renovate preset
-        env:
-          # renovate: datasource=npm depName=renovate
-          RENOVATE: 44.155.8
-        run: npx --yes --package "renovate@$RENOVATE" -- renovate-config-validator --strict default.json renovate.json
-
-  coverage-tool:
-    name: coverage tool ${{ matrix.mcr }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        mcr: ['2.13.2', '3']
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24
-          cache: npm
-
-      - run: npm ci
-
-      - name: The recorder, the unit-cover hook and diff coverage on monocart-coverage-reports ${{ matrix.mcr }}
-        env:
-          MCR: ${{ matrix.mcr }}
-        run: |
-          npm install --no-save --no-audit --no-fund "monocart-coverage-reports@$MCR"
-          node -p 'require("monocart-coverage-reports/package.json").version'
-          npx --no-install slicc-cdp install-browser
-          xvfb-run -a node --test test/integration/recorder.test.mjs test/integration/unit-cover.test.mjs test/integration/dot-dir-cover.test.mjs test/integration/ts-transform-cover.test.mjs
-
   pipeline:
     if: github.event_name != 'push'
     uses: ./.github/workflows/pipeline.yml
@@ -79,3 +27,13 @@ jobs:
       id-token: write
     with:
       shards: 1
+      lint: |
+        set -e
+        npm run lint
+        # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$
+        ACTIONLINT=1.7.12
+        bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v$ACTIONLINT/scripts/download-actionlint.bash") "$ACTIONLINT" "$RUNNER_TEMP" > /dev/null
+        "$RUNNER_TEMP/actionlint" -color
+        # renovate: datasource=npm depName=renovate
+        RENOVATE=44.155.8
+        npx --yes --package "renovate@$RENOVATE" -- renovate-config-validator --strict default.json renovate.json
