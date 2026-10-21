@@ -43,7 +43,10 @@ export function unquote(text) {
   return Buffer.from(bytes).toString('utf8');
 }
 
-const path = (side) => (side === '/dev/null' ? undefined : unquote(side).slice(2));
+function path(side) {
+  const named = side.replace(/\t$/, '');
+  return named === '/dev/null' ? undefined : unquote(named).slice(2);
+}
 
 function mark(file, found) {
   file.hunks = true;
@@ -73,14 +76,18 @@ export function marks(text) {
   return files;
 }
 
+function where(root, name) {
+  const found = git(root, ['rev-parse', '--git-path', name]);
+  return found === undefined ? undefined : resolve(root, found.trim());
+}
+
+const present = (file) => file !== undefined && existsSync(file);
+
 export function parents(root) {
-  const head = git(root, ['rev-parse', '--git-path', 'MERGE_HEAD']);
-  const file = head === undefined ? undefined : resolve(root, head.trim());
-  const merging =
-    file !== undefined && existsSync(file)
-      ? readFileSync(file, 'utf8').split('\n').filter(Boolean)
-      : [];
-  const picked = ['CHERRY_PICK_HEAD', 'REBASE_HEAD']
+  const head = where(root, 'MERGE_HEAD');
+  const merging = present(head) ? readFileSync(head, 'utf8').split('\n').filter(Boolean) : [];
+  const rebasing = ['rebase-merge', 'rebase-apply'].some((dir) => present(where(root, dir)));
+  const picked = (rebasing ? ['CHERRY_PICK_HEAD', 'REBASE_HEAD'] : ['CHERRY_PICK_HEAD'])
     .map((ref) => git(root, ['rev-parse', '-q', '--verify', `${ref}^{commit}`])?.trim())
     .filter(Boolean);
   return [...merging, ...picked];
