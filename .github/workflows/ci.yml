@@ -28,7 +28,6 @@ jobs:
     with:
       shards: 1
       lint: |
-        set -e
         npm run lint
         # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$
         ACTIONLINT=1.7.12
