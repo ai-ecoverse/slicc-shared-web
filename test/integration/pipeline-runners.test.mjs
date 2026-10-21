@@ -134,3 +134,10 @@ test('timings come from the latest merge queue run, else the latest pull request
     /if: steps\.queued\.outputs\.found_artifact != 'true'[\s\S]*?event: pull_request/
   );
 });
+
+test('reviewers get the head with full history and keep their files outside the checkout', () => {
+  const reviewer = jobs().reviewer.join('\n');
+  assert.match(reviewer, /uses: actions\/checkout@\S+\n\s+with:\n\s+fetch-depth: 0/);
+  assert.doesNotMatch(reviewer, /(^|[\s"'(])review\/(?!name)/m);
+  assert.match(reviewer, /--add-dir \$\{\{ runner\.temp \}\}\/review/);
+});
