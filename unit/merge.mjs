@@ -1,0 +1,110 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const diff = [
+  '-c',
+  'diff.mnemonicprefix=no',
+  '-c',
+  'diff.noprefix=no',
+  '-c',
+  'diff.srcPrefix=a/',
+  '-c',
+  'diff.dstPrefix=b/',
+  'diff',
+  '--cached',
+  '--no-color',
+  '--no-ext-diff',
+  '--no-relative',
+  '-U0',
+];
+const escapes = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 };
+const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+
+function git(root, args) {
+  const run = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 2 ** 30 });
+  return run.status === 0 ? run.stdout : undefined;
+}
+
+export function unquote(text) {
+  if (!text.startsWith('"')) return text;
+  const bytes = [];
+  for (let at = 1; at < text.length - 1; at++) {
+    if (text[at] !== '\\') {
+      bytes.push(text.charCodeAt(at));
+      continue;
+    }
+    const next = text[++at];
+    if (/[0-7]/.test(next)) {
+      bytes.push(Number.parseInt(text.slice(at, at + 3), 8));
+      at += 2;
+    } else bytes.push(escapes[next] ?? next.charCodeAt(0));
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+const path = (side) => (side === '/dev/null' ? undefined : unquote(side).slice(2));
+
+function mark(file, found) {
+  file.hunks = true;
+  const start = Number(found[1]);
+  const count = found[2] === undefined ? 1 : Number(found[2]);
+  if (count === 0) file.marks.add(`^${start}`);
+  for (let at = start; at < start + count; at++) file.marks.add(`+${at}`);
+}
+
+export function marks(text) {
+  const files = new Map();
+  let file;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      file = { header: line, paths: [], marks: new Set(), hunks: false };
+      continue;
+    }
+    if (!file) continue;
+    const found = hunk.exec(line);
+    if (found) mark(file, found);
+    else if (!file.hunks && (line.startsWith('--- ') || line.startsWith('+++ '))) {
+      const named = path(line.slice(4));
+      if (named !== undefined) file.paths.push(named);
+      if (line.startsWith('+++ ')) files.set(file.paths.at(-1), file);
+    }
+  }
+  return files;
+}
+
+export function parents(root) {
+  const head = git(root, ['rev-parse', '--git-path', 'MERGE_HEAD']);
+  const file = head === undefined ? undefined : resolve(root, head.trim());
+  const merging =
+    file !== undefined && existsSync(file)
+      ? readFileSync(file, 'utf8').split('\n').filter(Boolean)
+      : [];
+  const picked = ['CHERRY_PICK_HEAD', 'REBASE_HEAD']
+    .map((ref) => git(root, ['rev-parse', '-q', '--verify', `${ref}^{commit}`])?.trim())
+    .filter(Boolean);
+  return [...merging, ...picked];
+}
+
+export function merged(root = process.cwd()) {
+  const others = parents(root);
+  if (others.length === 0) return undefined;
+  const views = ['HEAD', ...others].map((parent) => git(root, [...diff, parent]));
+  if (views.includes(undefined)) return undefined;
+  const [base, ...rest] = views.map(marks);
+  const prefix = git(root, ['rev-parse', '--show-prefix'])?.trim() ?? '';
+  const files = new Set();
+  let text = '';
+  for (const [name, file] of base) {
+    const kept = [...file.marks].filter((entry) =>
+      rest.every((other) => other.get(name)?.marks.has(entry))
+    );
+    if (kept.length === 0) continue;
+    for (const each of file.paths)
+      if (each.startsWith(prefix)) files.add(each.slice(prefix.length));
+    const lines = kept.filter((entry) => entry.startsWith('+')).map((entry) => entry.slice(1));
+    if (lines.length > 0)
+      text += `${file.header}\n${lines.map((at) => `@@ -0,0 +${at} @@\n+\n`).join('')}`;
+  }
+  return { files: [...files], diff: text };
+}
