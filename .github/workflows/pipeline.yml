@@ -347,9 +347,6 @@ jobs:
             const xml = readFileSync(report, 'utf8');
             for (const [, attrs, body = ''] of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
               if (/file="[^"]*\/slicc-shared-web\/unit\/none\.mjs"/.test(attrs)) continue;
-              const path = /\bfile="([^"]*)"/.exec(attrs)?.[1] ?? '';
-              const file = files.find((candidate) => path === candidate || path.endsWith(`/${candidate}`));
-              if (file) shards.get(file).add(report.split('/')[1]);
               if (/<skipped\b/.test(body)) {
                 skipped += 1;
                 continue;
@@ -357,6 +354,10 @@ jobs:
               tests += 1;
               if (/<(failure|error)\b/.test(body)) failed += 1;
             }
+          }
+          const lists = globSync('junit/**/*.files');
+          for (const list of lists) {
+            for (const file of readFileSync(list, 'utf8').split('\n')) shards.get(file)?.add(list.split('/')[1]);
           }
           const missing = files.filter((file) => shards.get(file).size === 0);
           const twice = files.filter((file) => shards.get(file).size > 1);
@@ -366,6 +367,7 @@ jobs:
             RESULT !== 'success' ? `the test job ended with ${RESULT}`
             : failed > 0 ? `${failed} of ${tests} tests failed`
             : tests === 0 && REQUIRE === 'true' ? 'no test ran (a repo without node tests sets require-tests: false)'
+            : files.length > 0 && lists.length === 0 ? 'no shard listed the files it ran (update the @ai-ecoverse/slicc-shared-web devDependency to the version of this workflow)'
             : missing.length > 0 ? `${missing.length} test-glob files ran on no shard`
             : twice.length > 0 ? `${twice.length} test-glob files ran on more than one shard`
             : '';
