@@ -259,7 +259,7 @@ SLICC_UNIT_ALL=1 git commit
 
 CPU profiling is off by default. V8's sampler interrupts each page and worker thread every 100 µs with a signal, and the renderer SIGSEGVs in slicc-bios#114 all fault inside a signal handler walking the interrupted thread's frames, which points at it. Turn it on with `profile: true` or `SLICC_PROFILE=1` to get one CPU profile per target and snapshot in the test's artifact directory, and the 15 frames with the most self time in the repo's own scripts in `hotspots.md`. Without it, `hotspots.md` says that profiling is off.
 
-`monocart-coverage-reports` is a peer dependency (2.13 or later, 3.x included); pin it in the repo's `devDependencies`. The harness works with both majors: 3.x's `/util` entry has only a named `Util` export and 2.x's a default one, and CI runs the recorder and the unit-cover hook on 2.13.2 and the latest 3.x. The browser is the first of these:
+`monocart-coverage-reports` is a peer dependency (2.13 or later, 3.x included); pin it in the repo's `devDependencies`. The harness handles both majors: 3.x's `/util` entry has only a named `Util` export and 2.x's a default one. CI tests only the pinned 2.13.2, so 3.x support is unverified. The browser is the first of these:
 - `launch({ executable })`;
 - `$CHROME_PATH`;
 - `findBrowser()` from `@ai-ecoverse/slicc-cdp`. It finds a Chrome for Testing that `npx slicc-cdp install-browser --version <x.y.z.w>` installed, or a system Chrome;
