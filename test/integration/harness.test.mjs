@@ -63,13 +63,25 @@ test('types into the page, overrides files and opens a second tab', async (t) =>
   assert.equal(extra.headers['content-length'], '11');
 });
 
-test('until reports the last answer when the deadline cuts the final check short', async (t) => {
+test('until reports the last answer when the deadline cuts the final check short', {
+  timeout: 60000,
+}, async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
-  const late = () => new Promise((resolve) => setTimeout(resolve, 100, false));
-  await assert.rejects(page.within(180, late), /\nlast result: false$/);
-  const nothing = () => new Promise((resolve) => setTimeout(resolve, 100, undefined));
-  await assert.rejects(page.within(180, nothing), /\nlast result: undefined$/);
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const ms = 30000;
+  const final = 150;
+  await page.expose('call', (count) => t.mock.timers.tick(count === 1 ? ms - final : final));
+  const once = (answer) => {
+    window.calls = (window.calls ?? 0) + 1;
+    window.call(JSON.stringify(window.calls));
+    return window.calls === 1 ? { false: false }[answer] : new Promise(() => {});
+  };
+  await assert.rejects(page.within(ms, once, 'false'), /\nlast result: false$/);
+  await page.evaluate(() => {
+    window.calls = 0;
+  });
+  await assert.rejects(page.within(ms, once, 'undefined'), /\nlast result: undefined$/);
 });
 
 test('serves remotes from the CDN cache and injects failures', async (t) => {
