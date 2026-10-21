@@ -28,15 +28,21 @@ if (report && process.execArgv.includes('--test') && !process.env.NODE_TEST_CONT
   const beat = new Int32Array(new SharedArrayBuffer(4));
   const alive = () => Atomics.notify(beat, 0, Atomics.add(beat, 0, 1) + 1);
   const { after, afterEach, beforeEach } = require('node:test');
-  beforeEach(alive);
+  let running = 0;
+  beforeEach(() => {
+    running++;
+    alive();
+  });
   afterEach((t) => {
+    running--;
     alive();
     if (t.error?.failureType === 'testTimeoutFailure') note(`: "${t.fullName}" ${t.error.message}`);
   });
   if (ms > 0) {
     const { Worker } = require('node:worker_threads');
-    const line = `${file} was killed after ${stall}ms without a test starting or ending (a hang outside any test, or a blocked event loop)\n`;
+    const line = `${file} was killed after ${stall}ms with no test running and nothing finishing, or its event loop blocked\n`;
     new Worker(watchdog, { eval: true, workerData: { beat, stall, report, line } }).unref();
+    setInterval(() => running > 0 && alive(), 1000).unref();
     after(() => {
       alive();
       setTimeout(() => {
