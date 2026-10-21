@@ -60,3 +60,11 @@ test('release runs in release-environment, and after-release only when a new tag
   assert.match(release, /RELEASE_VERSION=\$\(git tag --points-at HEAD --list 'v\*'/);
   assert.match(release, /if \[ -z "\$RELEASE_VERSION" \]; then[\s\S]*?exit 0/);
 });
+
+test("a caller's command fails on its first failing line, pipes included", () => {
+  const calls = [
+    ...text.matchAll(/bash (?:[-\w]+ )*?-c "\$(LINT|DEPLOY|TEST|REVIEW_BROWSER|AFTER_RELEASE)"/g),
+  ];
+  assert.equal(calls.length, 5, calls.map((m) => m[0]).join());
+  for (const [call] of calls) assert.match(call, /^bash -eo pipefail -c /, call);
+});
