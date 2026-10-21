@@ -84,7 +84,7 @@ jobs:
       - name: Lint
         env:
           LINT: ${{ inputs.lint }}
-        run: bash -c "$LINT"
+        run: bash -eo pipefail -c "$LINT"
 
       - id: shards
         env:
@@ -157,7 +157,7 @@ jobs:
         name: Deploy to staging
         env:
           DEPLOY: ${{ inputs.deploy }}
-        run: bash -c "$DEPLOY"
+        run: bash -eo pipefail -c "$DEPLOY"
 
   test:
     needs: [lint, deploy]
@@ -245,7 +245,7 @@ jobs:
             export DISPLAY=:99
           fi
           export SLICC_TEST_FILES SLICC_TEST_ALL SLICC_TEST_SHARD SLICC_TEST_JUNIT SLICC_TEST_NODE_OPTIONS NODE_OPTIONS
-          bash -c "$TEST"
+          bash -eo pipefail -c "$TEST"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
@@ -377,7 +377,7 @@ jobs:
               tree=$GITHUB_WORKSPACE
               [ "$side" = head ] || tree=$RUNNER_TEMP/base
               (cd "$tree" && SLICC_REVIEW_SIDE=$side SLICC_REVIEW_LINK=$link \
-                SLICC_REVIEW_CDP="http://127.0.0.1:$port" bash -c "$REVIEW_BROWSER")
+                SLICC_REVIEW_CDP="http://127.0.0.1:$port" bash -eo pipefail -c "$REVIEW_BROWSER")
               list="$list{\"side\":\"$side\",\"link\":\"$link\",\"cdp\":\"http://127.0.0.1:$port\",\"tree\":\"$tree\"},"
               port=$((port + 1))
             done
@@ -669,4 +669,4 @@ jobs:
             exit 0
           fi
           export RELEASE_VERSION
-          bash -c "$AFTER_RELEASE"
+          bash -eo pipefail -c "$AFTER_RELEASE"

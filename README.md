@@ -108,6 +108,8 @@ Every pull request does, except Renovate's: one opened by `renovate[bot]` from a
 
 `*` reviews every Renovate pull request. With the default, none, a Renovate pull request is held only by its integration tests.
 
+The commands in `lint`, `test`, `deploy`, `review-browser` and `after-release` run with `bash -eo pipefail -c`, so a multi-line command stops at its first failing line, a failure inside a pipe included.
+
 | Input | Default | |
 |---|---|---|
 | `node-version` | `24` | |
