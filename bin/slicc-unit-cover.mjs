@@ -49,7 +49,7 @@ function bounded(command, args, env, ms) {
     child.on('close', (status) => {
       clearTimeout(timer);
       for (const [name, handler] of signals) process.off(name, handler);
-      if (late) kill('SIGKILL');
+      kill('SIGKILL');
       resolve({ status: status ?? 1, late });
     });
   });
