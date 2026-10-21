@@ -45,9 +45,12 @@ export function unquote(text) {
   return Buffer.from(bytes).toString('utf8');
 }
 
-function path(side) {
-  const named = side.replace(/\t$/, '');
-  return named === '/dev/null' ? undefined : unquote(named).slice(2);
+function named(header) {
+  const rest = header.slice('diff --git '.length);
+  const half = (rest.length - 1) / 2;
+  if (rest[half] !== ' ') return undefined;
+  const from = unquote(rest.slice(0, half)).slice(2);
+  return from === unquote(rest.slice(half + 1)).slice(2) ? from : undefined;
 }
 
 function mark(file, found) {
@@ -57,23 +60,36 @@ function mark(file, found) {
   for (let at = start; at < start + count; at++) file.marks.add(`+${at}`);
 }
 
+const meta = /^(new file mode|deleted file mode|new mode|rename from|rename to) /;
+
+function describe(files, file, line) {
+  file.marks.add(`=${line}`);
+  const moved = /^rename (from|to) (.*)$/.exec(line);
+  if (moved === null) return;
+  file.paths.push(unquote(moved[2]));
+  if (moved[1] === 'to') files.set(file.paths.at(-1), file);
+}
+
 export function marks(text) {
   const files = new Map();
   let file;
   for (const line of text.split('\n')) {
     if (line.startsWith('diff --git ')) {
-      file = { header: line, paths: [], marks: new Set(), hunks: false };
+      const path = named(line);
+      file = {
+        header: line,
+        paths: path === undefined ? [] : [path],
+        marks: new Set(),
+        hunks: false,
+      };
+      if (path !== undefined) files.set(path, file);
       continue;
     }
     if (!file) continue;
     const found = hunk.exec(line);
     if (found) mark(file, found);
     else if (file.hunks && line.startsWith('-')) file.marks.add(line);
-    else if (!file.hunks && (line.startsWith('--- ') || line.startsWith('+++ '))) {
-      const named = path(line.slice(4));
-      if (named !== undefined) file.paths.push(named);
-      if (line.startsWith('+++ ')) files.set(file.paths.at(-1), file);
-    }
+    else if (!file.hunks && meta.test(line)) describe(files, file, line);
   }
   return files;
 }
@@ -131,7 +147,9 @@ export function merged(root = process.cwd()) {
   for (const [name, file] of base) {
     const matches = rest.map((other, at) => other.get(name) ?? other.get(moved[at].get(name)));
     const kept = [...file.marks].filter((entry) =>
-      matches.every((other) => other?.marks.has(entry))
+      matches.every(
+        (other) => other !== undefined && (entry.startsWith('=') || other.marks.has(entry))
+      )
     );
     if (kept.length === 0) continue;
     for (const each of [file, ...matches].flatMap((one) => one.paths))
