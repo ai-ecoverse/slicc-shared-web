@@ -573,6 +573,22 @@ test('a unit test file whose top-level after() takes a while to clean up passes'
   ]);
 });
 
+test('a unit test with its own timeout longer than SLICC_UNIT_TIMEOUT runs to the end and passes', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/a.test.mjs': unit(
+      'a',
+      "import { setTimeout } from 'node:timers/promises';\nimport { a } from '../../src/a.mjs';\na(1);\ntest('slow', { timeout: 20000 }, () => setTimeout(8000));"
+    ),
+  });
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const run = await bounded(dir, { SLICC_UNIT_TIMEOUT: '1000' }, 45_000);
+  assert.equal(run.status, 0, run.stdout);
+  assert.deepEqual(verdicts(run), [
+    'slicc-unit-cover: PASS 1 unit test files in 1 batch, diff coverage 100%',
+  ]);
+});
+
 test('a unit test file that hangs outside any test is killed and the FAIL names it', async () => {
   const dir = await fixture({
     ...js,
@@ -586,7 +602,7 @@ test('a unit test file that hangs outside any test is killed and the FAIL names 
   assert.equal(run.signal, null, 'the hook hung on the file');
   assert.notEqual(run.status, 0);
   assert.deepEqual(verdicts(run), [
-    'slicc-unit-cover: FAIL the unit tests failed (status 1): test/unit/a.test.mjs was killed after 6000ms without a test starting or ending (a hang outside any test, or a blocked event loop)',
+    'slicc-unit-cover: FAIL the unit tests failed (status 1): test/unit/a.test.mjs was killed after 6000ms with no test running and nothing finishing, or its event loop blocked',
   ]);
 });
 
