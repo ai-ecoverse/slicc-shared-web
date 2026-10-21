@@ -52,7 +52,6 @@ function mark(file, found) {
   file.hunks = true;
   const start = Number(found[1]);
   const count = found[2] === undefined ? 1 : Number(found[2]);
-  if (count === 0) file.marks.add(`^${start}`);
   for (let at = start; at < start + count; at++) file.marks.add(`+${at}`);
 }
 
@@ -67,6 +66,7 @@ export function marks(text) {
     if (!file) continue;
     const found = hunk.exec(line);
     if (found) mark(file, found);
+    else if (file.hunks && line.startsWith('-')) file.marks.add(line);
     else if (!file.hunks && (line.startsWith('--- ') || line.startsWith('+++ '))) {
       const named = path(line.slice(4));
       if (named !== undefined) file.paths.push(named);
