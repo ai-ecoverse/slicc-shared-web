@@ -208,7 +208,7 @@ jobs:
         with:
           name: ^junit-
           name_is_regexp: true
-          search_artifacts: true
+          event: pull_request
           workflow_conclusion: completed
           if_no_artifact_found: ignore
           path: ${{ runner.temp }}/junit-download
@@ -336,22 +336,82 @@ jobs:
       issues: read
       pull-requests: read
     steps:
-      - env:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: The pull request, from git and the event
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/context"
+          git diff "$BASE...$HEAD" > "$RUNNER_TEMP/context/pr.diff"
+          git diff --name-status "$BASE...$HEAD" > "$RUNNER_TEMP/context/files.txt"
+          git log --format='%H%x09%an%x09%s' "$BASE..$HEAD" > "$RUNNER_TEMP/context/commits.txt"
+          node --input-type=module <<'EOF'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const { pull_request: pr } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+          const out = { number: pr.number, title: pr.title, body: pr.body, author: pr.user.login, labels: pr.labels.map((label) => label.name), draft: pr.draft, base: pr.base.ref, head: pr.head.ref };
+          writeFileSync(`${process.env.RUNNER_TEMP}/context/pr.json`, JSON.stringify(out, null, 2));
+          EOF
+
+      - name: Comments, reviews, issues and pull requests, as far as the API allows
+        env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          mkdir -p context
-          gh pr view "$PR" --json number,title,body,author,labels,comments,reviews,commits,files > context/pr.json
-          gh pr diff "$PR" > context/pr.diff
-          gh api --paginate "repos/$GH_REPO/pulls/$PR/comments" > context/review-comments.json
-          gh issue list --state all --limit 500 --json number,title,state,body,labels,createdAt,closedAt > context/issues.json
-          gh pr list --state all --limit 200 --json number,title,state,body,mergedAt > context/pulls.json
+          node --input-type=module <<'EOF'
+          import { writeFile } from 'node:fs/promises';
+          const { GITHUB_API_URL: api, GITHUB_REPOSITORY: repo, GH_TOKEN, PR, RUNNER_TEMP } = process.env;
+          const dir = `${RUNNER_TEMP}/context`;
+          const missing = [];
+          const get = async (path) => {
+            for (let attempt = 1; ; attempt += 1) {
+              const res = await fetch(`${api}/${path}`, { headers: { authorization: `Bearer ${GH_TOKEN}`, accept: 'application/vnd.github+json' } });
+              if (res.ok) return res.json();
+              if (attempt === 2) throw new Error(`${path}: ${res.status} ${(await res.text()).slice(0, 200)}`);
+              await new Promise((resolve) => setTimeout(resolve, 20000));
+            }
+          };
+          const pages = async (path, most) => {
+            const items = [];
+            for (let page = 1; page <= most; page += 1) {
+              const batch = await get(`${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
+              items.push(...batch);
+              if (batch.length < 100) break;
+            }
+            return items;
+          };
+          const save = async (name, what) => {
+            try {
+              await writeFile(`${dir}/${name}`, JSON.stringify(await what(), null, 2));
+            } catch (error) {
+              missing.push(`${name}: ${error.message}`);
+            }
+          };
+          await save('comments.json', () => pages(`repos/${repo}/issues/${PR}/comments`, 3));
+          await save('reviews.json', () => pages(`repos/${repo}/pulls/${PR}/reviews`, 3));
+          await save('review-comments.json', () => pages(`repos/${repo}/pulls/${PR}/comments`, 3));
+          let all = [];
+          await save('issues.json', async () => {
+            all = await pages(`repos/${repo}/issues?state=all&sort=updated`, 5);
+            return all.filter((item) => !item.pull_request).map(({ number, title, state, body, labels, created_at, closed_at }) => ({ number, title, state, body, labels: labels.map((label) => label.name), created_at, closed_at }));
+          });
+          await save('pulls.json', async () => all.filter((item) => item.pull_request).map(({ number, title, state, body, pull_request }) => ({ number, title, state, body, merged_at: pull_request.merged_at })));
+          await writeFile(`${dir}/missing.txt`, missing.join('\n'));
+          for (const line of missing) console.log(`::warning title=Review context::${line}`);
+          EOF
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: context
-          path: context/
+          path: ${{ runner.temp }}/context/
 
   reviewer:
     needs: [lint, test, deploy, context]
@@ -457,7 +517,7 @@ jobs:
           The working directory holds:
           - .: the pull request's head, dependencies installed.
           - $RUNNER_TEMP/base: its base, dependencies installed, to compare with.
-          - review/context/: the pull request (pr.json, pr.diff, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json).
+          - review/context/: the pull request (pr.json, pr.diff, files.txt, commits.txt, comments.json, reviews.json, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json). missing.txt names any the GitHub API wouldn't give; read those with gh if you need them.
           - review/integration/: the integration tests' coverage, artifacts (screenshots, CPU profiles, crash dumps, console logs) and JUnit reports, one directory per shard.
           - review/browsers.json: four running headed Chrome instances on the virtual display $DISPLAY, reachable over CDP, one per side (head, base) and link (extension, slicc-cli). The repository's review-browser hook, if it has one, loaded each side's build into them; without one they are bare Chrome. Each also runs slicc-shared-web's harness extension, a content script on every page and frame that sets data-slicc-harness-extension, standing in for the password managers and similar extensions real users have; it is expected, not a finding. Use them to compare the head's behaviour with the base's.
           ${STAGING_URL:+- The service is deployed to staging at $STAGING_URL.}
