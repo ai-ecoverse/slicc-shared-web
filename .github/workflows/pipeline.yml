@@ -42,6 +42,12 @@ on:
       review-renovate:
         type: string
         default: ''
+      node-options:
+        type: string
+        default: ''
+      require-tests:
+        type: boolean
+        default: true
       release-environment:
         type: string
         default: ''
@@ -52,6 +58,8 @@ on:
       AWS_BEARER_TOKEN_BEDROCK:
         required: false
       SLICC_ISSUES_TOKEN:
+        required: false
+      CLOUDFLARE_API_TOKEN:
         required: false
 
 permissions:
@@ -161,7 +169,7 @@ jobs:
 
   test:
     needs: [lint, deploy]
-    if: github.event_name != 'push' && !cancelled() && needs.lint.result == 'success' && needs.deploy.result != 'failure'
+    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && !cancelled() && needs.lint.result == 'success' && needs.deploy.result != 'failure'
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
@@ -218,6 +226,7 @@ jobs:
           GLOB: ${{ inputs.test-glob }}
           FILES: ${{ steps.split.outputs.paths }}
           SHARD: ${{ matrix.shard }}
+          EXTRA_NODE_OPTIONS: ${{ inputs.node-options }}
           STAGING_URL: ${{ needs.deploy.outputs.url }}
         run: |
           shard=node_modules/@ai-ecoverse/slicc-shared-web/harness/shard.cjs
@@ -231,8 +240,8 @@ jobs:
           SLICC_TEST_ALL=$(node -e 'for (const file of require("node:fs").globSync(process.argv[1])) console.log(file)' "$GLOB")
           SLICC_TEST_SHARD=$SHARD
           SLICC_TEST_JUNIT=$PWD/junit/$SHARD.xml
-          SLICC_TEST_NODE_OPTIONS=${NODE_OPTIONS:-}
-          NODE_OPTIONS="${NODE_OPTIONS:-} --require $PWD/$shard --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=$PWD/junit/$SHARD.xml"
+          SLICC_TEST_NODE_OPTIONS="${NODE_OPTIONS:-} $EXTRA_NODE_OPTIONS"
+          NODE_OPTIONS="$SLICC_TEST_NODE_OPTIONS --require $PWD/$shard --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=$PWD/junit/$SHARD.xml"
           if [ -z "${DISPLAY:-}" ]; then
             if ! command -v Xvfb > /dev/null; then
               if [ "$(id -u)" = 0 ]; then apt-get update -qq && apt-get install -y -qq xvfb
@@ -266,12 +275,45 @@ jobs:
 
   integration:
     needs: test
-    if: github.event_name != 'push' && !cancelled()
+    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && !cancelled()
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        continue-on-error: true
+        with:
+          pattern: junit-*
+          path: junit
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+
       - env:
           RESULT: ${{ needs.test.result }}
-        run: test "$RESULT" = success
+          REQUIRE: ${{ inputs.require-tests }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { globSync, readFileSync } from 'node:fs';
+          const { RESULT, REQUIRE } = process.env;
+          const reports = globSync('junit/**/*.xml');
+          let tests = 0;
+          let failed = 0;
+          for (const report of reports) {
+            const xml = readFileSync(report, 'utf8');
+            for (const [, attrs, body = ''] of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
+              if (/file="[^"]*\/unit\/none\.mjs"/.test(attrs)) continue;
+              tests += 1;
+              if (/<(failure|error)\b/.test(body)) failed += 1;
+            }
+          }
+          const why =
+            RESULT !== 'success' ? `the test job ended with ${RESULT}`
+            : failed > 0 ? `${failed} of ${tests} tests failed`
+            : tests === 0 && REQUIRE === 'true' ? `no test ran: ${reports.length} JUnit reports name no test (set require-tests: false for a repo without node tests)`
+            : '';
+          console.log(why ? `integration: FAIL ${why}` : `integration: PASS ${tests} tests in ${reports.length} JUnit reports`);
+          process.exit(why ? 1 : 0);
+          EOF
 
   context:
     needs: lint
@@ -392,6 +434,7 @@ jobs:
           STAGING_URL: ${{ needs.deploy.outputs.url }}
           EXTRA: ${{ inputs.review-prompt }}
         run: |
+          mkdir -p review/shots
           cat > review/prompt.txt <<EOF
           Review pull request $PR of $REPO.
 
@@ -410,6 +453,7 @@ jobs:
           - comments: findings on lines the pull request adds or changes, with path relative to the repository root and the line number in the head.
           - issues: problems worth tracking outside this pull request, each with repo as owner/name, a title and a body.
             Leave out any that review/context/issues.json already has open, even under another title.
+          Screenshots: when a finding is about what a page shows, save a PNG to review/shots/ (a name of letters, digits, dots, dashes or underscores; at most 20 files) and put it in the summary, a comment or an issue body as ![what it shows](shots/name.png). They're published with your findings.
 
           $EXTRA
           EOF
@@ -462,7 +506,9 @@ jobs:
         if: always()
         with:
           name: findings-${{ matrix.agent }}
-          path: review/findings.json
+          path: |
+            review/findings.json
+            review/shots/
           if-no-files-found: ignore
 
   post:
@@ -484,8 +530,37 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
+      - name: Screenshots to R2
+        id: r2
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || '155ec15a52a18a14801e04b019da5e5a' }}
+          R2_BUCKET: ${{ vars.R2_BUCKET || 'slicc-pr-screenshots' }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || 'https://pub-e4170b327f03406f9831a6f393b96e05.r2.dev' }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          # renovate: datasource=npm depName=wrangler
+          WRANGLER: 4.151.0
+        run: |
+          prefix="$GITHUB_REPOSITORY/pr-$PR/${SHA:0:7}"
+          echo "base=$R2_PUBLIC_BASE_URL/$prefix" >> "$GITHUB_OUTPUT"
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "no CLOUDFLARE_API_TOKEN, so screenshots stay in the findings artifacts"; exit 0; }
+          for dir in findings/findings-*; do
+            agent=${dir#findings/findings-}
+            : > "$dir/uploaded.txt"
+            for f in "$dir"/shots/*.png; do
+              [ -f "$f" ] || continue
+              name=$(basename "$f")
+              [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::warning::$name isn't a valid R2 key here; it stays in the artifact"; continue; }
+              npx --yes "wrangler@$WRANGLER" r2 object put "$R2_BUCKET/$prefix/$agent/$name" --file "$f" --content-type image/png --remote
+              echo "$name" >> "$dir/uploaded.txt"
+            done
+          done
+
       - env:
           GH_TOKEN: ${{ github.token }}
+          R2_BASE: ${{ steps.r2.outputs.base }}
           ISSUES_TOKEN: ${{ secrets.SLICC_ISSUES_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha }}
@@ -493,7 +568,7 @@ jobs:
         run: |
           node --input-type=module <<'EOF'
           import { readFile } from 'node:fs/promises';
-          const { GITHUB_API_URL: api, GITHUB_REPOSITORY: repo, GH_TOKEN, ISSUES_TOKEN, PR, SHA, RUN_URL } = process.env;
+          const { GITHUB_API_URL: api, GITHUB_REPOSITORY: repo, GH_TOKEN, ISSUES_TOKEN, PR, SHA, RUN_URL, R2_BASE } = process.env;
           const call = async (method, path, body, token = GH_TOKEN) => {
             const res = await fetch(`${api}/${path}`, {
               method,
@@ -521,6 +596,14 @@ jobs:
           let failed = false;
           for (const agent of ['claude', 'codex']) {
             const findings = await readFile(`findings/findings-${agent}/findings.json`, 'utf8').then(JSON.parse).catch(() => undefined);
+            const uploaded = new Set((await readFile(`findings/findings-${agent}/uploaded.txt`, 'utf8').catch(() => '')).split('\n').filter(Boolean));
+            const shots = (text) => text.replace(/!\[([^\]]*)\]\((?:\.\/)?shots\/([^)\s]+)\)/g, (_, alt, name) =>
+              R2_BASE && uploaded.has(name) ? `![${alt || name}](${R2_BASE}/${agent}/${name})` : `📷 _${alt || name}_ ([\`${name}\` in findings-${agent}](${RUN_URL}))`);
+            if (findings) {
+              findings.summary = shots(findings.summary);
+              for (const comment of findings.comments) comment.body = shots(comment.body);
+              for (const issue of findings.issues) issue.body = shots(issue.body);
+            }
             const state = !findings ? 'error' : findings.verdict === 'approved' ? 'success' : 'failure';
             await post(`repos/${repo}/statuses/${SHA}`, {
               state,
@@ -563,7 +646,7 @@ jobs:
 
   review:
     needs: [lint, integration, reviewer]
-    if: github.event_name != 'push' && !cancelled()
+    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && !cancelled()
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     steps:
       - if: needs.lint.outputs.review == 'true'
@@ -607,7 +690,7 @@ jobs:
 
   release:
     needs: lint
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: ${{ inputs.release-environment }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
