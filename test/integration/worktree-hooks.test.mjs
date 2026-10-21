@@ -18,7 +18,11 @@ import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
-const installer = join(repo, 'bin', 'slicc-install-hooks.sh');
+const installer = join(
+  repo,
+  JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).bin['slicc-install-hooks']
+);
+const runner = (script) => (script.endsWith('.sh') ? 'sh' : process.execPath);
 const dirs = [];
 after(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
@@ -76,7 +80,7 @@ function modules(dir) {
 }
 
 function install(dir, script = installer) {
-  const run = spawnSync('sh', [script], {
+  const run = spawnSync(runner(script), [script], {
     cwd: dir,
     encoding: 'utf8',
     env: env({ PATH: `${join(dir, 'node_modules', '.bin')}:${path}` }),
@@ -358,7 +362,11 @@ test('it succeeds whatever core.hooksPath is already set, shared or per worktree
 test('outside a git checkout it does nothing and exits 0', () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'slicc-worktree-hooks-none-')));
   dirs.push(dir);
-  const run = spawnSync('sh', [installer], { cwd: dir, encoding: 'utf8', env: env() });
+  const run = spawnSync(runner(installer), [installer], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: env(),
+  });
   assert.equal(run.status, 0, run.stdout + run.stderr);
   assert.equal(run.stdout + run.stderr, '');
   assert.deepEqual(readdirSync(dir), []);
@@ -375,4 +383,31 @@ test('a package in a subdirectory gets its shims and hooks under its own directo
   assert.ok(existsSync(join(pkg, 'node_modules', '.git-hooks', 'pre-commit')));
   ranWith(commit(main, 'from the root'), pkg, [a]);
   assert.equal(git(main, ['config', '--get', 'extensions.worktreeConfig']).status, 1);
+});
+
+test('on Windows it does nothing and exits 0, leaving git config and the checkout untouched', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'slicc-worktree-hooks-win32-')));
+  dirs.push(base);
+  const preload = join(base, 'win32.mjs');
+  writeFileSync(
+    preload,
+    "Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });\n"
+  );
+  const main = join(base, 'main');
+  mkdirSync(main);
+  writeFileSync(join(main, 'lefthook.yml'), config);
+  ok(main, 'init', '-q');
+  modules(main);
+  const config0 = readFileSync(join(main, '.git', 'config'), 'utf8');
+  const run = spawnSync(process.execPath, ['--import', preload, installer], {
+    cwd: main,
+    encoding: 'utf8',
+    env: env({ PATH: `${join(main, 'node_modules', '.bin')}:${path}` }),
+  });
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+  assert.equal(run.stdout + run.stderr, '');
+  assert.equal(readFileSync(join(main, '.git', 'config'), 'utf8'), config0);
+  assert.equal(git(main, ['config', '--get-all', 'core.hooksPath']).status, 1);
+  assert.equal(existsSync(join(main, '.githooks')), false);
+  assert.equal(existsSync(join(main, 'node_modules', '.git-hooks')), false);
 });
