@@ -125,3 +125,12 @@ test('context takes the diff from git and survives an API quota running out', ()
   assert.match(context, /missing\.txt/);
   assert.doesNotMatch(text, /search_artifacts: true/);
 });
+
+test('timings come from the latest merge queue run, else the latest pull request run', () => {
+  const test = jobs().test.join('\n');
+  assert.match(test, /id: queued[\s\S]*?event: merge_group/);
+  assert.match(
+    test,
+    /if: steps\.queued\.outputs\.found_artifact != 'true'[\s\S]*?event: pull_request/
+  );
+});

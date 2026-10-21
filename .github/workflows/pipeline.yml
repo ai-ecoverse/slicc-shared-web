@@ -203,7 +203,19 @@ jobs:
           if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then DEPS=1; fi
           npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser ${DEPS:+--with-deps} ${CHROME:+--version "$CHROME"}
 
-      - uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
+      - id: queued
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
+        continue-on-error: true
+        with:
+          name: ^junit-
+          name_is_regexp: true
+          event: merge_group
+          workflow_conclusion: completed
+          if_no_artifact_found: ignore
+          path: ${{ runner.temp }}/junit-download
+
+      - if: steps.queued.outputs.found_artifact != 'true'
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
         continue-on-error: true
         with:
           name: ^junit-
@@ -398,12 +410,15 @@ jobs:
           await save('comments.json', () => pages(`repos/${repo}/issues/${PR}/comments`, 3));
           await save('reviews.json', () => pages(`repos/${repo}/pulls/${PR}/reviews`, 3));
           await save('review-comments.json', () => pages(`repos/${repo}/pulls/${PR}/comments`, 3));
-          let all = [];
+          let all;
           await save('issues.json', async () => {
             all = await pages(`repos/${repo}/issues?state=all&sort=updated`, 5);
             return all.filter((item) => !item.pull_request).map(({ number, title, state, body, labels, created_at, closed_at }) => ({ number, title, state, body, labels: labels.map((label) => label.name), created_at, closed_at }));
           });
-          await save('pulls.json', async () => all.filter((item) => item.pull_request).map(({ number, title, state, body, pull_request }) => ({ number, title, state, body, merged_at: pull_request.merged_at })));
+          await save('pulls.json', async () => {
+            if (!all) throw new Error('the issues listing it comes from failed');
+            return all.filter((item) => item.pull_request).map(({ number, title, state, body, pull_request }) => ({ number, title, state, body, merged_at: pull_request.merged_at }));
+          });
           await writeFile(`${dir}/missing.txt`, missing.join('\n'));
           for (const line of missing) console.log(`::warning title=Review context::${line}`);
           EOF
