@@ -35,5 +35,5 @@ jobs:
         bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v$ACTIONLINT/scripts/download-actionlint.bash") "$ACTIONLINT" "$RUNNER_TEMP" > /dev/null
         "$RUNNER_TEMP/actionlint" -color
         # renovate: datasource=npm depName=renovate
-        RENOVATE=44.155.8
+        RENOVATE=44.156.0
         npx --yes --package "renovate@$RENOVATE" -- renovate-config-validator --strict default.json renovate.json
