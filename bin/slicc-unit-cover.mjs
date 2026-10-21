@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { code, ParseError, select } from '../unit/graph.mjs';
@@ -69,8 +70,19 @@ const batches = [];
 if (tests === undefined || !(size > 0) || tests.length <= size) batches.push(tests);
 else for (let at = 0; at < tests.length; at += size) batches.push(tests.slice(at, at + size));
 const reports = [];
+const scratch = mkdtempSync(join(tmpdir(), 'slicc-unit-cover-'));
+const report = join(scratch, 'report');
+process.on('exit', () => rmSync(scratch, { recursive: true, force: true }));
+const why = () => {
+  const lines = existsSync(report) ? readFileSync(report, 'utf8').trim().split('\n') : [];
+  return lines.length > 0 ? `: ${lines.join('; ')}` : '';
+};
 for (const [index, batch] of batches.entries()) {
-  const env = { ...process.env };
+  const env = {
+    ...process.env,
+    SLICC_UNIT_TIMEOUT: process.env.SLICC_UNIT_TIMEOUT ?? '60000',
+    SLICC_UNIT_REPORT: report,
+  };
   if (batch === undefined) delete env.SLICC_UNIT_TESTS;
   else {
     env.SLICC_UNIT_TESTS = batch.join('\n');
@@ -84,7 +96,7 @@ for (const [index, batch] of batches.entries()) {
   const status = run('npm', ['run', '--silent', 'test:unit'], env);
   if (status !== 0) {
     const which = batches.length > 1 ? `batch ${index + 1} of ${batches.length}` : 'the unit tests';
-    verdict(false, `${which} failed (status ${status})`);
+    verdict(false, `${which} failed (status ${status})${why()}`);
   }
 }
 const local = join(root, 'node_modules', '.bin', 'slicc-diff-cover');

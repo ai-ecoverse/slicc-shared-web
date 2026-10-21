@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -498,4 +498,65 @@ test('a commit with no code staged passes with one verdict, and a failing diff c
     low.stdout.trim().split('\n').at(-1),
     'slicc-unit-cover: FAIL diff coverage is not 100% (1 unit test files in 1 batch)'
   );
+});
+
+function bounded(dir, extra, ms) {
+  const child = spawn(process.execPath, [bin], {
+    cwd: dir,
+    detached: true,
+    env: env({ RAN: join(dir, 'ran.txt'), ...extra }),
+  });
+  let stdout = '';
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.resume();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => process.kill(-child.pid, 'SIGKILL'), ms);
+    child.on('close', (status, signal) => {
+      clearTimeout(timer);
+      const covered = existsSync(join(dir, 'covered.txt')) ? 'written' : undefined;
+      resolve({ status, signal, stdout, covered });
+    });
+  });
+}
+
+const verdicts = (run) => run.stdout.split('\n').filter((l) => l.startsWith('slicc-unit-cover:'));
+
+test('a unit test that leaves a server listening ends the hook with a FAIL naming the file and its open handle', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/a.test.mjs': unit(
+      'a',
+      "import { createServer } from 'node:http';\nimport { a } from '../../src/a.mjs';\na(1);\ntest('listens', () => new Promise((done) => createServer().listen(0, done)));"
+    ),
+  });
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const run = await bounded(dir, {}, 45_000);
+  assert.equal(run.signal, null, 'the hook hung on the open server');
+  assert.notEqual(run.status, 0);
+  assert.deepEqual(verdicts(run), [
+    'slicc-unit-cover: FAIL the unit tests failed (status 1): test/unit/a.test.mjs was force-exited after its tests, open handles kept it alive (TCPServerWrap)',
+  ]);
+  assert.equal(run.covered, undefined);
+});
+
+test('a unit test that never resolves times out after SLICC_UNIT_TIMEOUT and the FAIL names it', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/a.test.mjs': unit(
+      'a',
+      "import { a } from '../../src/a.mjs';\na(1);\ntest('waits forever', () => new Promise(() => setInterval(() => {}, 1000)));"
+    ),
+  });
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const run = await bounded(dir, { SLICC_UNIT_TIMEOUT: '2000' }, 45_000);
+  assert.equal(run.signal, null, 'the hook hung on the pending test');
+  assert.notEqual(run.status, 0);
+  const [line] = verdicts(run);
+  assert.match(
+    line,
+    /^slicc-unit-cover: FAIL the unit tests failed \(status 1\): test\/unit\/a\.test\.mjs: "waits forever" test timed out after 2000ms; /
+  );
+  assert.equal(run.covered, undefined);
 });
