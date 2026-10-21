@@ -18,6 +18,7 @@ const diff = [
   '--no-color',
   '--no-ext-diff',
   '--no-relative',
+  '-M',
   '-U0',
 ];
 const escapes = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 };

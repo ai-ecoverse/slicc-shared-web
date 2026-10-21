@@ -286,3 +286,32 @@ test('in a merge, a file with a non-ASCII name is diff-covered', async () => {
   assert.match(own.stdout, /src\/é\.mjs \([\d.]+%\): Missing lines 2-3$/m);
   assert.doesNotMatch(own.stdout, /src\/m\.mjs/);
 });
+
+test('a source file copied during a merge is diff-covered, whatever diff.renames says', async () => {
+  const fx = await fixture();
+  git(fx.dir, ['config', 'diff.renames', 'copies']);
+  save(fx.dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' }, 'side');
+  git(fx.dir, ['switch', '-q', fx.main]);
+  save(fx.dir, { 'src/m.mjs': `export const m = () => 'm';\n${uncovered('main')}` }, 'main');
+  git(fx.dir, ['switch', '-q', 'side']);
+  git(fx.dir, ['merge', '-q', '--no-ff', '--no-commit', fx.main]);
+  stage(fx.dir, {
+    'src/c.mjs': 'export const a = (x) => x + 2;\n',
+    'src/a.mjs': `export const a = (x) => x + 2;\n${uncovered('own')}`,
+  });
+  const copied = cover(fx);
+  assert.equal(copied.status, 1, copied.stdout + copied.stderr);
+  assert.match(copied.stdout, /^src\/c\.mjs \([\d.]+%\): Missing lines 1$/m);
+});
+
+test('a staged copy of a source file is diff-covered, whatever diff.renames says', async () => {
+  const fx = await fixture();
+  git(fx.dir, ['config', 'diff.renames', 'copies']);
+  stage(fx.dir, {
+    'src/c.mjs': 'export const a = (x) => x + 1;\n',
+    'src/a.mjs': 'export const a = (x) => x + 2;\n',
+  });
+  const copied = cover(fx);
+  assert.equal(copied.status, 1, copied.stdout + copied.stderr);
+  assert.match(copied.stdout, /^src\/c\.mjs \([\d.]+%\): Missing lines 1$/m);
+});
