@@ -8,7 +8,7 @@ on:
         default: '24'
       runs-on:
         type: string
-        default: ubuntu-latest
+        default: cloud-run-job
       timeout-minutes:
         type: number
         default: 20
@@ -42,6 +42,12 @@ on:
       review-renovate:
         type: string
         default: ''
+      release-environment:
+        type: string
+        default: ''
+      after-release:
+        type: string
+        default: ''
     secrets:
       AWS_BEARER_TOKEN_BEDROCK:
         required: false
@@ -58,12 +64,13 @@ env:
 
 jobs:
   lint:
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       shards: ${{ steps.shards.outputs.shards }}
       total: ${{ steps.shards.outputs.total }}
       review: ${{ steps.review.outputs.review }}
+      bedrock: ${{ steps.bedrock.outputs.bedrock }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -105,14 +112,22 @@ jobs:
           console.log(`review=${review}`);
           EOF
 
+      - id: bedrock
+        env:
+          BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK != '' }}
+        run: echo "bedrock=$BEDROCK" >> "$GITHUB_OUTPUT"
+
   deploy:
     needs: lint
-    if: inputs.deploy != '' && github.event_name != 'push'
-    runs-on: ${{ inputs.runs-on }}
+    if: inputs.deploy != '' && github.event_name == 'pull_request'
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     environment:
       name: staging
       url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       url: ${{ steps.deploy.outputs.url }}
     steps:
@@ -147,7 +162,7 @@ jobs:
   test:
     needs: [lint, deploy]
     if: github.event_name != 'push' && !cancelled() && needs.lint.result == 'success' && needs.deploy.result != 'failure'
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
@@ -219,10 +234,16 @@ jobs:
           SLICC_TEST_NODE_OPTIONS=${NODE_OPTIONS:-}
           NODE_OPTIONS="${NODE_OPTIONS:-} --require $PWD/$shard --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=$PWD/junit/$SHARD.xml"
           if [ -z "${DISPLAY:-}" ]; then
+            if ! command -v Xvfb > /dev/null; then
+              if [ "$(id -u)" = 0 ]; then apt-get update -qq && apt-get install -y -qq xvfb
+              elif sudo -n true 2>/dev/null; then sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+              else echo "::error title=Display::No Xvfb on $RUNNER_NAME and no root to install it: add xvfb to the runner image"; exit 1
+              fi
+            fi
             nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 &
             for _ in $(seq 50); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.2; done
             export DISPLAY=:99
-            fi
+          fi
           export SLICC_TEST_FILES SLICC_TEST_ALL SLICC_TEST_SHARD SLICC_TEST_JUNIT SLICC_TEST_NODE_OPTIONS NODE_OPTIONS
           bash -c "$TEST"
 
@@ -246,7 +267,7 @@ jobs:
   integration:
     needs: test
     if: github.event_name != 'push' && !cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
     steps:
       - env:
           RESULT: ${{ needs.test.result }}
@@ -255,7 +276,7 @@ jobs:
   context:
     needs: lint
     if: needs.lint.outputs.review == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
     permissions:
       contents: read
       issues: read
@@ -280,8 +301,8 @@ jobs:
 
   reviewer:
     needs: [lint, test, deploy, context]
-    if: needs.lint.outputs.review == 'true' && !cancelled() && needs.test.result != 'skipped' && needs.context.result == 'success' && needs.deploy.result != 'failure'
-    runs-on: ${{ inputs.runs-on }}
+    if: needs.lint.outputs.review == 'true' && needs.lint.outputs.bedrock == 'true' && !cancelled() && needs.test.result != 'skipped' && needs.context.result == 'success' && needs.deploy.result != 'failure'
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -332,6 +353,12 @@ jobs:
           npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser ${DEPS:+--with-deps} ${CHROME:+--version "$CHROME"}
           browser=$(npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp find-browser ${CHROME:+--version "$CHROME"} | tail -1)
           if [ -z "${DISPLAY:-}" ]; then
+            if ! command -v Xvfb > /dev/null; then
+              if [ "$(id -u)" = 0 ]; then apt-get update -qq && apt-get install -y -qq xvfb
+              elif sudo -n true 2>/dev/null; then sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+              else echo "::error title=Display::No Xvfb on $RUNNER_NAME and no root to install it: add xvfb to the runner image"; exit 1
+              fi
+            fi
             nohup Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 &
             for _ in $(seq 50); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.2; done
             export DISPLAY=:99
@@ -428,6 +455,7 @@ jobs:
           codex-home: ${{ runner.temp }}/codex-home
           model: ${{ vars.CODEX_BEDROCK_MODEL || 'global.openai.gpt-6.1-sol' }}
           sandbox: danger-full-access
+          safety-strategy: ${{ runner.environment == 'github-hosted' && 'drop-sudo' || 'unsafe' }}
           allow-bot-users: renovate
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -440,7 +468,7 @@ jobs:
   post:
     needs: reviewer
     if: '!cancelled() && needs.reviewer.result != ''skipped'''
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
     permissions:
       contents: read
       issues: write
@@ -536,7 +564,7 @@ jobs:
   review:
     needs: [lint, integration, reviewer]
     if: github.event_name != 'push' && !cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
     steps:
       - if: needs.lint.outputs.review == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -548,11 +576,16 @@ jobs:
       - env:
           EVENT: ${{ github.event_name }}
           REVIEW: ${{ needs.lint.outputs.review }}
+          BEDROCK: ${{ needs.lint.outputs.bedrock }}
           INTEGRATION: ${{ needs.integration.result }}
         run: |
           if [ "$EVENT" = merge_group ]; then
             echo "merge queue: reviewed on the pull request"
             exit 0
+          fi
+          if [ "$REVIEW" = true ] && [ "$BEDROCK" != true ]; then
+            echo "::error title=Review::AWS_BEARER_TOKEN_BEDROCK isn't available to this repo: add it to the org secret's repositories, then re-run"
+            exit 1
           fi
           if [ "$REVIEW" != true ]; then
             echo "no review for this pull request: integration $INTEGRATION"
@@ -570,7 +603,8 @@ jobs:
   release:
     needs: lint
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.release-environment }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
       group: release-${{ github.ref_name }}
@@ -617,3 +651,12 @@ jobs:
           EOF
           chmod +x "$shim/git"
           REAL_GIT="$(command -v git)" PATH="$shim:$PATH" npx semantic-release
+
+      - name: After release
+        if: inputs.after-release != ''
+        env:
+          AFTER_RELEASE: ${{ inputs.after-release }}
+        run: |
+          RELEASE_VERSION=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//')
+          export RELEASE_VERSION
+          bash -c "$AFTER_RELEASE"
