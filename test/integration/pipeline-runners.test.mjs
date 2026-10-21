@@ -134,6 +134,7 @@ test('lint plans the split once from the latest merge queue run, else the latest
     /if: [^\n]*steps\.queued\.outputs\.found_artifact != 'true'[\s\S]*?event: pull_request/
   );
   assert.match(lint, /split: \$\{\{ steps\.split\.outputs\.split \}\}/);
+  assert.match(lint, /id: split\n {8}if: [^\n]+\n {8}shell: bash\n/);
   const test = jobs().test.join('\n');
   assert.doesNotMatch(test, /action-download-artifact|split-tests-by-timings/);
   assert.match(test, /FILES: \$\{\{ fromJSON\(needs\.lint\.outputs\.split\)\[matrix\.shard\] \}\}/);

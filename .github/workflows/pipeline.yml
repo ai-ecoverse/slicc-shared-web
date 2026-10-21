@@ -138,6 +138,7 @@ jobs:
 
       - id: split
         if: github.event_name != 'push'
+        shell: bash
         env:
           GLOB: ${{ inputs.test-glob }}
           TOTAL: ${{ steps.shards.outputs.total }}
