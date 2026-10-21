@@ -532,11 +532,11 @@ test('a unit test that leaves a server listening ends the hook with a FAIL namin
     ),
   });
   change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
-  const run = await bounded(dir, {}, 45_000);
+  const run = await bounded(dir, { SLICC_UNIT_TIMEOUT: '2000' }, 45_000);
   assert.equal(run.signal, null, 'the hook hung on the open server');
   assert.notEqual(run.status, 0);
   assert.deepEqual(verdicts(run), [
-    'slicc-unit-cover: FAIL the unit tests failed (status 1): test/unit/a.test.mjs was still running 3000ms after its tests, open handles kept it alive (TCPServerWrap)',
+    'slicc-unit-cover: FAIL the unit tests failed (status 1): test/unit/a.test.mjs was still running 2000ms after its tests ended, open handles kept it alive (TCPServerWrap)',
   ]);
   assert.equal(run.covered, undefined);
 });
@@ -551,6 +551,22 @@ test('a unit test that closes the server it started passes', async () => {
   });
   change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
   const run = await bounded(dir, {}, 45_000);
+  assert.equal(run.status, 0, run.stdout);
+  assert.deepEqual(verdicts(run), [
+    'slicc-unit-cover: PASS 1 unit test files in 1 batch, diff coverage 100%',
+  ]);
+});
+
+test('a unit test file whose top-level after() takes a while to clean up passes', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/a.test.mjs': unit(
+      'a',
+      "import { after } from 'node:test';\nimport { setTimeout } from 'node:timers/promises';\nimport { a } from '../../src/a.mjs';\na(1);\nafter(() => setTimeout(4000));"
+    ),
+  });
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const run = await bounded(dir, { SLICC_UNIT_TIMEOUT: '6000' }, 45_000);
   assert.equal(run.status, 0, run.stdout);
   assert.deepEqual(verdicts(run), [
     'slicc-unit-cover: PASS 1 unit test files in 1 batch, diff coverage 100%',
