@@ -709,11 +709,12 @@ test('a SLICC_UNIT_TIMEOUT or SLICC_UNIT_BATCH_TIMEOUT that is not a whole numbe
     ['SLICC_UNIT_TIMEOUT', ''],
     ['SLICC_UNIT_BATCH_TIMEOUT', '1m'],
     ['SLICC_UNIT_BATCH_TIMEOUT', '-1'],
+    ['SLICC_UNIT_BATCH_TIMEOUT', '3000000000'],
   ]) {
     const run = cover(dir, { [name]: value });
     assert.equal(run.status, 1, `${name}=${value}`);
     assert.deepEqual(verdicts(run), [
-      `slicc-unit-cover: FAIL ${name} must be a whole number of milliseconds, 0 for none, not ${JSON.stringify(value)}`,
+      `slicc-unit-cover: FAIL ${name} must be a whole number of milliseconds up to 2147483647, 0 for none, not ${JSON.stringify(value)}`,
     ]);
     assert.deepEqual(run.ran, []);
   }
