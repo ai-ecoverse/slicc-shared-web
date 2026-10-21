@@ -1,5 +1,5 @@
 'use strict';
-const { existsSync, globSync, renameSync, statSync } = require('node:fs');
+const { existsSync, globSync, renameSync, statSync, writeFileSync } = require('node:fs');
 const { isAbsolute, join, matchesGlob, normalize, relative } = require('node:path');
 
 const env = process.env;
@@ -56,6 +56,16 @@ function keepReport() {
   }
 }
 
+function record(files) {
+  const junit = env.SLICC_TEST_JUNIT;
+  if (junit) {
+    writeFileSync(
+      junit.replace(/(\.xml)?$/, `-${process.pid}.files`),
+      files.map((file) => `${file}\n`).join('')
+    );
+  }
+}
+
 function select(patterns) {
   const matches = (file) => patterns.length === 0 || patterns.some((p) => inside(file, p));
   const mine = lines(list).filter(matches);
@@ -69,6 +79,7 @@ function select(patterns) {
 if (list !== undefined && process.execArgv.includes('--test') && !env.NODE_TEST_CONTEXT) {
   keepReport();
   const chosen = select(process.argv.slice(1));
+  record(chosen ?? expand(process.argv.slice(1)));
   env.NODE_OPTIONS = env.SLICC_TEST_NODE_OPTIONS ?? '';
   for (const name of [
     'SLICC_TEST_NODE_OPTIONS',

@@ -45,6 +45,7 @@ test('two displays get their own numbers and close with their Xvfb', {
 }, async () => {
   const [one, two] = await Promise.all([ownDisplay({}), ownDisplay({})]);
   assert.notEqual(one.env.DISPLAY, two.env.DISPLAY);
+  for (const { env } of [one, two]) assert.ok(Number(env.DISPLAY.slice(1)) >= 1000, env.DISPLAY);
   assert.ok(existsSync(socket(one.env.DISPLAY)), one.env.DISPLAY);
   await Promise.all([one.close(), two.close()]);
   assert.ok(await gone(socket(one.env.DISPLAY)), one.env.DISPLAY);
