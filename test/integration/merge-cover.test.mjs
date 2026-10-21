@@ -286,3 +286,32 @@ test('renaming a source file during a merge runs the unit tests that import it',
   assert.match(moved.stderr, /running 1 of 1 unit test files/);
   assert.match(moved.stdout, /the unit tests failed/);
 });
+
+test('a source file copied during a merge is diff-covered, whatever diff.renames says', async () => {
+  const fx = await fixture();
+  git(fx.dir, ['config', 'diff.renames', 'copies']);
+  save(fx.dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' }, 'side');
+  git(fx.dir, ['switch', '-q', fx.main]);
+  save(fx.dir, { 'src/m.mjs': `export const m = () => 'm';\n${uncovered('main')}` }, 'main');
+  git(fx.dir, ['switch', '-q', 'side']);
+  git(fx.dir, ['merge', '-q', '--no-ff', '--no-commit', fx.main]);
+  stage(fx.dir, {
+    'src/c.mjs': 'export const a = (x) => x + 2;\n',
+    'src/a.mjs': `export const a = (x) => x + 2;\n${uncovered('own')}`,
+  });
+  const copied = cover(fx);
+  assert.equal(copied.status, 1, copied.stdout + copied.stderr);
+  assert.match(copied.stdout, /^src\/c\.mjs \([\d.]+%\): Missing lines 1$/m);
+});
+
+test('a staged copy of a source file is diff-covered, whatever diff.renames says', async () => {
+  const fx = await fixture();
+  git(fx.dir, ['config', 'diff.renames', 'copies']);
+  stage(fx.dir, {
+    'src/c.mjs': 'export const a = (x) => x + 1;\n',
+    'src/a.mjs': 'export const a = (x) => x + 2;\n',
+  });
+  const copied = cover(fx);
+  assert.equal(copied.status, 1, copied.stdout + copied.stderr);
+  assert.match(copied.stdout, /^src\/c\.mjs \([\d.]+%\): Missing lines 1$/m);
+});
