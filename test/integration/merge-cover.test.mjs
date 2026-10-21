@@ -171,3 +171,33 @@ test('a conflicted cherry-pick asks no coverage for the picked lines, only for t
   assert.match(resolved.stdout, /src\/a\.mjs \([\d.]+%\): Missing lines 3$/m);
   assert.doesNotMatch(resolved.stdout, /src\/m\.mjs/);
 });
+
+test('in a merge, a file whose name has a space is still diff-covered', async () => {
+  const fx = await fixture();
+  save(fx.dir, { 'src/a b.mjs': 'export const s = 1;\n' }, 'side');
+  git(fx.dir, ['switch', '-q', fx.main]);
+  save(fx.dir, { 'src/m.mjs': `export const m = () => 'm';\n${uncovered('main')}` }, 'main');
+  git(fx.dir, ['switch', '-q', 'side']);
+  git(fx.dir, ['merge', '-q', '--no-ff', '--no-commit', fx.main]);
+  stage(fx.dir, { 'src/a b.mjs': `export const s = 1;\n${uncovered('own')}` });
+  const own = cover(fx);
+  assert.equal(own.status, 1, own.stdout + own.stderr);
+  assert.doesNotMatch(own.stdout, /no code staged/);
+  assert.match(own.stdout, /src\/a b\.mjs \([\d.]+%\): Missing lines \d/);
+  assert.doesNotMatch(own.stdout, /src\/m\.mjs/);
+});
+
+test('once a conflicted rebase has finished, the next commit is diff-covered as usual', async () => {
+  const fx = await fixture();
+  save(fx.dir, { 'src/a.mjs': `export const a = (x) => x + 2;\n${uncovered('side')}` }, 'side');
+  git(fx.dir, ['switch', '-q', fx.main]);
+  save(fx.dir, { 'src/a.mjs': 'export const a = (x) => x + 3;\n' }, 'main');
+  git(fx.dir, ['switch', '-q', 'side']);
+  assert.notEqual(git(fx.dir, ['rebase', fx.main], false).status, 0);
+  stage(fx.dir, { 'src/a.mjs': 'export const a = (x) => x + 4;\n' });
+  git(fx.dir, ['rebase', '--continue']);
+  stage(fx.dir, { 'src/a.mjs': `export const a = (x) => x + 4;\n${uncovered('side')}` });
+  const later = cover(fx);
+  assert.equal(later.status, 1, later.stdout + later.stderr);
+  assert.match(later.stdout, /src\/a\.mjs \([\d.]+%\): Missing lines 3$/m);
+});
