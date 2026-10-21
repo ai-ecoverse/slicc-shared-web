@@ -1,7 +1,9 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parse } from 'acorn';
 import { ALL, BODY, describe } from './exports.mjs';
+import { inSources, unitSources } from './sources.mjs';
 import { compile } from './typescript.mjs';
 
 export const code = /\.(m|c)?(j|t)sx?$/;
@@ -226,12 +228,12 @@ function reacher(graph) {
     const absent = [];
     const seen = new Set();
     const queue = [[start, BODY]];
-    const go = (file, spec, name) => {
+    const go = (file, spec, name, asset) => {
       const found = find(file, spec);
       if (found?.hit) queue.push([found.hit, name]);
       else if (found) {
         for (const path of found.missing) touched.add(path);
-        if (found.missing.length > 0) absent.push(found.missing);
+        if (found.missing.length > 0 && !asset) absent.push(found.missing);
       }
     };
     while (queue.length > 0) {
@@ -242,9 +244,9 @@ function reacher(graph) {
       touched.add(file);
       const info = graph.load(file);
       if (!info) continue;
-      for (const [next, wanted, spec] of step(info, name, file, context)) {
+      for (const [next, wanted, spec, asset] of step(info, name, file, context)) {
         if (spec === undefined) queue.push([next, wanted]);
-        else go(next, spec, wanted);
+        else go(next, spec, wanted, asset);
       }
     }
     return { touched, absent };
@@ -264,7 +266,9 @@ function step(info, name, file, context) {
   if (name === BODY) {
     return [
       ...info.imports.flatMap(({ spec, names }) => names.map((wanted) => [file, wanted, spec])),
-      ...info.dynamic.flatMap(({ spec, names }) => names.map((wanted) => [file, wanted, spec])),
+      ...info.dynamic.flatMap(({ spec, names, asset }) =>
+        names.map((wanted) => [file, wanted, spec, asset])
+      ),
     ];
   }
   if (info.whole) return [[file, BODY]];
@@ -282,15 +286,29 @@ function step(info, name, file, context) {
   return starred(file, info, name, context);
 }
 
+function ignored(root) {
+  const memo = new Map();
+  return (path) => {
+    if (!memo.has(path)) {
+      const run = spawnSync('git', ['check-ignore', '-q', '--', path], { cwd: root });
+      memo.set(path, run.status === 0);
+    }
+    return memo.get(path);
+  };
+}
+
 export function select({ root, changed }) {
   const all = walk(join(root, 'test', 'unit')).filter((file) => tests.test(file));
   const staged = new Set(changed.map((file) => resolve(root, file)));
   const reach = reacher(modules(root));
   const posix = (file) => relative(root, file).split(sep).join('/');
+  const sources = unitSources(root);
+  const built = ignored(root);
   const lacks = ([target, ...rest]) =>
-    !relative(root, target).startsWith('..') &&
-    !target.includes(`${sep}node_modules${sep}`) &&
+    (code.test(target) || extname(target) === '') &&
+    inSources(relative(root, target), root, sources) &&
     !existsSync(target) &&
+    !built(target) &&
     ![target, ...rest].some((path) => staged.has(path));
   const reached = [];
   const elsewhere = [];

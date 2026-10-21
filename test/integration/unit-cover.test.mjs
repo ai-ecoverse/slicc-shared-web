@@ -186,6 +186,39 @@ test('a synced-in unit test that also imports a module this tree lacks is skippe
   );
 });
 
+test('a source that points at build-only artifacts a fresh tree lacks still runs the test that imports it', async () => {
+  const dir = await fixture({
+    ...js,
+    '.gitignore':
+      'node_modules/\ncoverage/\ntest/unit/\nran.txt\ncovered.txt\ndist/\nsrc/codemode/generated.mjs\n',
+    'src/codemode/run.mjs': [
+      "export const wasm = () => [new URL('../quickjs.wasm', import.meta.url)];",
+      "export const worker = () => new URL('./codemode-worker.mjs', import.meta.url);",
+      "export const built = () => import('../../dist/codemode-worker.mjs');",
+      "export const generated = () => import('./generated.mjs');",
+      'export const run = (x) => x + 1;',
+      '',
+    ].join('\n'),
+    'src/cli/main.mjs': "export { run } from '../codemode/run.mjs';\n",
+    'test/unit/main.test.mjs': unit(
+      'main',
+      "import { run } from '../../src/cli/main.mjs';\nrun(1);"
+    ),
+  });
+  change(dir, {
+    'src/codemode/run.mjs': readFileSync(join(dir, 'src/codemode/run.mjs'), 'utf8').replace(
+      'x + 1',
+      'x + 2'
+    ),
+  });
+  const run = cover(dir);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.ran, ['main']);
+  assert.doesNotMatch(run.stderr, /skipping/);
+  assert.match(run.stderr, /running 1 of 5 unit test files/);
+  assert.match(record(run.covered, 'src/codemode/run.mjs'), /^DA:5,1$/m);
+});
+
 test('a README-only commit after syncing in new unit tests runs none of them', async () => {
   const dir = await fixture(js);
   write(dir, { 'test/unit/elsewhere.test.mjs': unit('elsewhere', "import '../../src/a.mjs';") });
