@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { compile, format, inline, typed } from './typescript.mjs';
 
 const swaps = { '.js': '.ts', '.mjs': '.mts', '.cjs': '.cts' };
+const missing = new Set(['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND']);
 
 const sibling = (specifier, parentURL) => {
   const ext = /^\.\.?\/.*(\.(m|c)?js)$/.exec(specifier)?.[1];
@@ -17,8 +18,7 @@ registerHooks({
     try {
       return nextResolve(specifier, context);
     } catch (error) {
-      const swapped =
-        error?.code === 'ERR_MODULE_NOT_FOUND' && sibling(specifier, context.parentURL);
+      const swapped = missing.has(error?.code) && sibling(specifier, context.parentURL);
       if (!swapped) throw error;
       return nextResolve(swapped, context);
     }

@@ -218,6 +218,7 @@ test('a TS-convention ./x.js specifier loads the sibling x.ts, and a package who
     'test/unit/a.test.mjs': [
       "import assert from 'node:assert/strict';",
       "import { test } from 'node:test';",
+      "import { createRequire } from 'node:module';",
       "import data from 'json-main';",
       "import { Kind, pick, sized } from '../../src/a.js';",
       "test('a', () => {",
@@ -225,6 +226,7 @@ test('a TS-convention ./x.js specifier loads the sibling x.ts, and a package who
       '  assert.equal(pick(false), Kind.Plain);',
       '  assert.equal(sized(), 42);',
       '  assert.deepEqual(data, { size: 41 });',
+      "  assert.equal(new (createRequire(import.meta.url)('../../src/counter.cjs').Counter)().count, 0);",
       '});',
       '',
     ].join('\n'),
