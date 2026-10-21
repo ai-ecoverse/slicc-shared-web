@@ -1,4 +1,5 @@
 'use strict';
+require('./guard.cjs');
 const { isAbsolute, join, matchesGlob, normalize, relative } = require('node:path');
 
 const key = Symbol.for('slicc.unit.select');
