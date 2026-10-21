@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { commit, commitAll, initFixtureRepo } from '@ai-ecoverse/slicc-shared-web/testing';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const bin = join(repo, 'bin', 'slicc-unit-cover.mjs');
@@ -124,9 +125,8 @@ async function fixture() {
     chmodSync(join(shims, 'uvx'), 0o755);
     path = `${shims}${delimiter}${path}`;
   }
-  git(dir, 'init', '-q');
-  git(dir, 'add', '-A');
-  git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init', '--no-verify');
+  initFixtureRepo(dir);
+  commitAll(dir, 'init');
   return { dir, path };
 }
 
@@ -174,17 +174,7 @@ test('TypeScript that needs a transform (enums, parameter properties) runs under
   assert.ok(lines(fx.dir, 'src/counter.cts')[2] > 0);
   assert.deepEqual(Object.values(lines(fx.dir, 'src/idle.ts')).filter(Boolean), []);
   assert.ok(Object.keys(lines(fx.dir, 'src/idle.ts')).length > 0);
-  git(
-    fx.dir,
-    '-c',
-    'user.name=t',
-    '-c',
-    'user.email=t@t',
-    'commit',
-    '-qm',
-    'covered',
-    '--no-verify'
-  );
+  commit(fx.dir, 'covered');
   write(fx.dir, {
     'src/box.ts': box('this.side * this.side * 1').replace(
       'Unit[this.unit]',

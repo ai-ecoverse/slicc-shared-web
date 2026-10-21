@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { commitAll, initFixtureRepo } from '@ai-ecoverse/slicc-shared-web/testing';
 import { inSources, unitSources } from '../../unit/sources.mjs';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
@@ -69,9 +70,8 @@ async function fixture(slicc) {
     chmodSync(join(shims, 'uvx'), 0o755);
     path = `${shims}${delimiter}${path}`;
   }
-  git(dir, 'init', '-q');
-  git(dir, 'add', '-A');
-  git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init', '--no-verify');
+  initFixtureRepo(dir);
+  commitAll(dir, 'init');
   return { dir, path };
 }
 
