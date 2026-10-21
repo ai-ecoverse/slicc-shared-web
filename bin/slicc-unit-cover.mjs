@@ -93,6 +93,16 @@ if (jsx.length > 0) {
   verdict(false, `coverage cannot be measured for JSX, which is not transformed: ${jsx.join(' ')}`);
 }
 
+const ms = (name, fallback) => {
+  const value = process.env[name] ?? fallback;
+  if (/^\d+$/.test(value)) return Number(value);
+  verdict(
+    false,
+    `${name} must be a whole number of milliseconds, 0 for none, not ${JSON.stringify(value)}`
+  );
+};
+const timeout = ms('SLICC_UNIT_TIMEOUT', '60000');
+const limit = ms('SLICC_UNIT_BATCH_TIMEOUT', '600000');
 const size = Number(process.env.SLICC_UNIT_BATCH ?? 60);
 const tests = selection(staged);
 const batches = [];
@@ -109,7 +119,7 @@ const why = () => {
 for (const [index, batch] of batches.entries()) {
   const env = {
     ...process.env,
-    SLICC_UNIT_TIMEOUT: process.env.SLICC_UNIT_TIMEOUT ?? '60000',
+    SLICC_UNIT_TIMEOUT: String(timeout),
     SLICC_UNIT_REPORT: report,
   };
   if (batch === undefined) delete env.SLICC_UNIT_TESTS;
@@ -122,7 +132,6 @@ for (const [index, batch] of batches.entries()) {
     reports.push(join(env.SLICC_UNIT_COVERAGE_DIR, 'lcov.info'));
     say(`batch ${index + 1} of ${batches.length}: ${batch.length} files`);
   }
-  const limit = Number(process.env.SLICC_UNIT_BATCH_TIMEOUT ?? 600000);
   const { status, late } = await bounded('npm', ['run', '--silent', 'test:unit'], env, limit);
   const which = batches.length > 1 ? `batch ${index + 1} of ${batches.length}` : 'the unit tests';
   if (late) {
