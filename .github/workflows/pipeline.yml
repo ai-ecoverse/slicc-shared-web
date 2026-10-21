@@ -64,7 +64,7 @@ env:
 
 jobs:
   lint:
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
       shards: ${{ steps.shards.outputs.shards }}
@@ -120,7 +120,7 @@ jobs:
   deploy:
     needs: lint
     if: inputs.deploy != '' && github.event_name == 'pull_request'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     environment:
       name: staging
@@ -162,7 +162,7 @@ jobs:
   test:
     needs: [lint, deploy]
     if: github.event_name != 'push' && !cancelled() && needs.lint.result == 'success' && needs.deploy.result != 'failure'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
@@ -267,7 +267,7 @@ jobs:
   integration:
     needs: test
     if: github.event_name != 'push' && !cancelled()
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     steps:
       - env:
           RESULT: ${{ needs.test.result }}
@@ -276,7 +276,7 @@ jobs:
   context:
     needs: lint
     if: needs.lint.outputs.review == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     permissions:
       contents: read
       issues: read
@@ -302,7 +302,7 @@ jobs:
   reviewer:
     needs: [lint, test, deploy, context]
     if: needs.lint.outputs.review == 'true' && needs.lint.outputs.bedrock == 'true' && !cancelled() && needs.test.result != 'skipped' && needs.context.result == 'success' && needs.deploy.result != 'failure'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -468,7 +468,7 @@ jobs:
   post:
     needs: reviewer
     if: '!cancelled() && needs.reviewer.result != ''skipped'''
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     permissions:
       contents: read
       issues: write
@@ -564,7 +564,7 @@ jobs:
   review:
     needs: [lint, integration, reviewer]
     if: github.event_name != 'push' && !cancelled()
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     steps:
       - if: needs.lint.outputs.review == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -577,6 +577,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           REVIEW: ${{ needs.lint.outputs.review }}
           BEDROCK: ${{ needs.lint.outputs.bedrock }}
+          FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
           INTEGRATION: ${{ needs.integration.result }}
         run: |
           if [ "$EVENT" = merge_group ]; then
@@ -584,7 +585,11 @@ jobs:
             exit 0
           fi
           if [ "$REVIEW" = true ] && [ "$BEDROCK" != true ]; then
-            echo "::error title=Review::AWS_BEARER_TOKEN_BEDROCK isn't available to this repo: add it to the org secret's repositories, then re-run"
+            if [ "$FORK" = true ]; then
+              echo "::error title=Review::A pull request from a fork gets no secrets, so it can't be reviewed: open the change again from a branch in this repo"
+            else
+              echo "::error title=Review::AWS_BEARER_TOKEN_BEDROCK isn't available to this repo: add it to the org secret's repositories, then re-run"
+            fi
             exit 1
           fi
           if [ "$REVIEW" != true ]; then
@@ -657,6 +662,11 @@ jobs:
         env:
           AFTER_RELEASE: ${{ inputs.after-release }}
         run: |
-          RELEASE_VERSION=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//')
+          git fetch --tags --force --quiet origin
+          RELEASE_VERSION=$(git tag --points-at HEAD --list 'v*' | sed 's/^v//' | sort -V | tail -1)
+          if [ -z "$RELEASE_VERSION" ]; then
+            echo "no release on $GITHUB_SHA, so after-release doesn't run"
+            exit 0
+          fi
           export RELEASE_VERSION
           bash -c "$AFTER_RELEASE"

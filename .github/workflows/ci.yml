@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   check:
-    runs-on: cloud-run-job
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || 'cloud-run-job' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -41,7 +41,7 @@ jobs:
 
   coverage-tool:
     name: coverage tool ${{ matrix.mcr }}
-    runs-on: cloud-run-job
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || 'cloud-run-job' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false

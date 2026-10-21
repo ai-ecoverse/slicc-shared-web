@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const text = readFileSync(`${root}/.github/workflows/pipeline.yml`, 'utf8');
-const pool = "${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || inputs.runs-on }}";
+const fork =
+  "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'";
+const pool = `\${{ ${fork} || inputs.runs-on }}`;
 
 function jobs() {
   const body = text.slice(text.indexOf('\njobs:\n'));
@@ -44,4 +46,18 @@ test('deploy runs on pull requests only, with an OIDC token', () => {
 test('reviewers start only when the repo can read the Bedrock secret', () => {
   assert.match(jobs().reviewer.join('\n'), /needs\.lint\.outputs\.bedrock == 'true'/);
   assert.match(jobs().review.join('\n'), /AWS_BEARER_TOKEN_BEDROCK isn't available to this repo/);
+});
+
+test("this repo's own CI keeps a fork's pull request off the pool too", () => {
+  const ci = readFileSync(`${root}/.github/workflows/ci.yml`, 'utf8');
+  const runners = [...ci.matchAll(/^ {4}runs-on:\s*(.+?)\s*$/gm)].map((m) => m[1]);
+  assert.ok(runners.length >= 2, runners.join());
+  for (const runner of runners) assert.equal(runner, `\${{ ${fork} || 'cloud-run-job' }}`);
+});
+
+test('release runs in release-environment, and after-release only when a new tag points at the commit', () => {
+  const release = jobs().release.join('\n');
+  assert.match(release, /environment: \$\{\{ inputs\.release-environment \}\}/);
+  assert.match(release, /RELEASE_VERSION=\$\(git tag --points-at HEAD --list 'v\*'/);
+  assert.match(release, /if \[ -z "\$RELEASE_VERSION" \]; then[\s\S]*?exit 0/);
 });
