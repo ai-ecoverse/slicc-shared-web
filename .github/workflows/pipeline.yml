@@ -406,6 +406,9 @@ jobs:
             export DISPLAY=:99
             echo "DISPLAY=:99" >> "$GITHUB_ENV"
           fi
+          extension=$GITHUB_WORKSPACE/node_modules/@ai-ecoverse/slicc-shared-web/harness/extension
+          [ -f "$extension/manifest.json" ] || extension=$GITHUB_WORKSPACE/harness/extension
+          [ -f "$extension/manifest.json" ] || { echo "::error title=Review browsers::No harness/extension: add @ai-ecoverse/slicc-shared-web as a devDependency, at the version of this workflow or later"; exit 1; }
           port=9301
           list=
           for side in head base; do
@@ -413,7 +416,7 @@ jobs:
               profile="$RUNNER_TEMP/browser-$side-$link"
               mkdir -p "$profile"
               nohup "$browser" --no-sandbox --no-first-run --no-default-browser-check --window-size=1280,800 \
-                --enable-unsafe-extension-debugging --remote-debugging-port="$port" \
+                --enable-unsafe-extension-debugging --load-extension="$extension" --remote-debugging-port="$port" \
                 --user-data-dir="$profile" about:blank > "$profile.log" 2>&1 &
               for _ in $(seq 50); do curl -fs "http://127.0.0.1:$port/json/version" > /dev/null && break; sleep 0.2; done
               tree=$GITHUB_WORKSPACE
@@ -443,7 +446,7 @@ jobs:
           - $RUNNER_TEMP/base: its base, dependencies installed, to compare with.
           - review/context/: the pull request (pr.json, pr.diff, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json).
           - review/integration/: the integration tests' coverage, artifacts (screenshots, CPU profiles, crash dumps, console logs) and JUnit reports, one directory per shard.
-          - review/browsers.json: four running headed Chrome instances on the virtual display $DISPLAY, reachable over CDP, one per side (head, base) and link (extension, slicc-cli). The repository's review-browser hook, if it has one, loaded each side's build into them; without one they are bare Chrome. Use them to compare the head's behaviour with the base's.
+          - review/browsers.json: four running headed Chrome instances on the virtual display $DISPLAY, reachable over CDP, one per side (head, base) and link (extension, slicc-cli). The repository's review-browser hook, if it has one, loaded each side's build into them; without one they are bare Chrome. Each also runs slicc-shared-web's harness extension, a content script on every page and frame that sets data-slicc-harness-extension, standing in for the password managers and similar extensions real users have; it is expected, not a finding. Use them to compare the head's behaviour with the base's.
           ${STAGING_URL:+- The service is deployed to staging at $STAGING_URL.}
 
           Read the change, run what you need, and decide whether it should be merged.

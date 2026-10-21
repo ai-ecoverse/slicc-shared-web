@@ -93,3 +93,9 @@ test('only post gets the Cloudflare token, for the reviewers screenshots', () =>
     .map(([name]) => name);
   assert.deepEqual(holders, ['post']);
 });
+
+test('every review browser runs the harness extension', () => {
+  const reviewer = jobs().reviewer.join('\n');
+  assert.match(reviewer, /--load-extension="\$extension"/);
+  assert.match(reviewer, /slicc-shared-web\/harness\/extension/);
+});
