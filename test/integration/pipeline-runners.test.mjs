@@ -110,3 +110,10 @@ test('deploy exports none of the secrets the pipeline declares for its own jobs'
   const own = /const own = new Set\(\[([^\]]*)\]\)/.exec(jobs().deploy.join('\n'))[1];
   for (const name of declared) assert.match(own, new RegExp(`'${name}'`), name);
 });
+
+test('a review gets review-timeout-minutes and review-screenshots, 60 and 30 by default', () => {
+  assert.equal(value(jobs().reviewer, 'timeout-minutes'), '${{ inputs.review-timeout-minutes }}');
+  assert.match(text, /review-timeout-minutes:\n {8}type: number\n {8}default: 60/);
+  assert.match(text, /review-screenshots:\n {8}type: number\n {8}default: 30/);
+  assert.match(jobs().reviewer.join('\n'), /at most \$SHOTS files/);
+});

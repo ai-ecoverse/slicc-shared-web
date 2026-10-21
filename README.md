@@ -116,7 +116,7 @@ The commands in `lint`, `test`, `deploy`, `review-browser` and `after-release` r
 |---|---|---|
 | `node-version` | `24` | |
 | `runs-on` | `cloud-run-job` | every job but `release`, which runs on `ubuntu-latest` because npm's trusted publishing takes OIDC tokens only from GitHub-hosted runners; a fork's pull request runs on `ubuntu-latest` too, so fork code never reaches the pool |
-| `timeout-minutes` | `20` | `lint`, `deploy`, each shard and `release`; a review gets 60 |
+| `timeout-minutes` | `20` | `lint`, `deploy`, each shard and `release`; a review gets `review-timeout-minutes` |
 | `lint` | `npm run lint` | |
 | `chrome` | stable | a Chrome for Testing version for `slicc-cdp install-browser` |
 | `test` | `npm test` | runs on Xvfb display `:99` when the runner has no `DISPLAY`; Xvfb is installed where the runner has root or sudo, and the step fails naming the runner when it has neither Xvfb nor root |
@@ -126,6 +126,8 @@ The commands in `lint`, `test`, `deploy`, `review-browser` and `after-release` r
 | `deploy-secrets` | all | newline- or space-separated secret names (any case) that `deploy` gets |
 | `review-browser` | `npm run --if-present review:browser` | |
 | `review-prompt` | none | |
+| `review-timeout-minutes` | `60` | how long each reviewer may take |
+| `review-screenshots` | `30` | the most screenshots a reviewer may attach |
 | `review-renovate` | none | globs of Renovate group slugs whose pull requests get a review |
 | `node-options` | none | node flags added to the test step's `NODE_OPTIONS`, such as `--max-old-space-size=8192` |
 | `require-tests` | `true` | `integration` fails when no test ran |
