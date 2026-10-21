@@ -95,10 +95,10 @@ if (jsx.length > 0) {
 
 const ms = (name, fallback) => {
   const value = process.env[name] ?? fallback;
-  if (/^\d+$/.test(value)) return Number(value);
+  if (/^\d+$/.test(value) && Number(value) <= 2147483647) return Number(value);
   verdict(
     false,
-    `${name} must be a whole number of milliseconds, 0 for none, not ${JSON.stringify(value)}`
+    `${name} must be a whole number of milliseconds up to 2147483647, 0 for none, not ${JSON.stringify(value)}`
   );
 };
 const timeout = ms('SLICC_UNIT_TIMEOUT', '60000');
