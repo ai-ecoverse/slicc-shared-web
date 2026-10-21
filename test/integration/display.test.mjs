@@ -51,8 +51,10 @@ test('two displays get their own numbers and close with their Xvfb', {
   assert.ok(await gone(socket(two.env.DISPLAY)), two.env.DISPLAY);
 });
 
+const isolated = xvfb && wantsOwnDisplay({ headed: true });
+
 test('headed browsers launched side by side each run on a display of their own', {
-  skip: !xvfb && 'needs Linux with Xvfb',
+  skip: !isolated && 'needs Linux with Xvfb, on CI or without DISPLAY',
 }, async () => {
   const roots = [['/', 'test/integration/page/']];
   const browsers = await Promise.all([
@@ -68,4 +70,45 @@ test('headed browsers launched side by side each run on a display of their own',
   assert.notEqual(displays[0], displays[1]);
   assert.ok(!displays.includes(process.env.DISPLAY), `${displays} vs ${process.env.DISPLAY}`);
   for (const display of displays) assert.ok(await gone(socket(display)), display);
+});
+
+test('a display that fails to start leaves no server or directory behind', {
+  skip: platform !== 'linux' && 'needs Linux',
+}, async () => {
+  const { mkdtemp, writeFile, chmod, readdir, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { execFile } = await import('node:child_process');
+  const bin = await mkdtemp(join(tmpdir(), 'slicc-fake-xvfb-'));
+  try {
+    await writeFile(join(bin, 'Xvfb'), '#!/bin/sh\nexit 1\n');
+    await chmod(join(bin, 'Xvfb'), 0o755);
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) => name.startsWith('slicc-harness-'))
+    );
+    const harness = new URL('../../harness/index.mjs', import.meta.url).href;
+    const script = `const { launch } = await import(${JSON.stringify(harness)});
+      await launch({ roots: [['/', 'test/integration/page/']], headless: false, coverage: [] }).then(
+        () => { console.log('launched'); process.exit(2); },
+        (error) => { console.log(error.message.split('\\n')[0]); }
+      );`;
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, CI: 'true' };
+    delete env.DISPLAY;
+    delete env.NODE_TEST_CONTEXT;
+    const out = await new Promise((resolve, reject) => {
+      execFile(
+        process.execPath,
+        ['--input-type=module', '-e', script],
+        { env, timeout: 20000 },
+        (error, stdout) => (error ? reject(Object.assign(error, { stdout })) : resolve(stdout))
+      );
+    });
+    assert.match(out, /Xvfb exited with 1/);
+    const after = (await readdir(tmpdir())).filter(
+      (name) => name.startsWith('slicc-harness-') && !before.has(name)
+    );
+    assert.deepEqual(after, []);
+  } finally {
+    await rm(bin, { recursive: true, force: true });
+  }
 });

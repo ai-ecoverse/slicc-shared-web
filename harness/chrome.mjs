@@ -138,6 +138,12 @@ export function died(child) {
 
 export const WAITS = { close: 10000, exit: 10000, kill: 5000 };
 
+export async function discard(error, closing, dirs) {
+  await Promise.all(closing);
+  await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  throw error;
+}
+
 export async function stop(cdp, child, waits = WAITS) {
   const gone = () => child.exitCode !== null || child.signalCode !== null;
   const exited = new Promise((resolve) => child.once('exit', resolve));
@@ -336,19 +342,15 @@ export async function launch({
   const userData = await mkdtemp(join(tmpdir(), PREFIX));
   const loaded = [...found.values()].map((root) => root.slice(0, -1));
   const dumps = await crashpad();
-  const screen = await screenFor(!headless || realistic, dumps.env);
+  const scrap = (error, close) =>
+    discard(error, [server.close(), close?.()], [userData, dumps.dir]);
+  const screen = await screenFor(!headless || realistic, dumps.env).catch((error) => scrap(error));
   const { child, exited, stderr } = await start(
     userData,
     commandLine(userData, loaded, args, realistic, builtin, headless),
     browser,
     screen.env
-  ).catch(async (error) => {
-    await Promise.all([server.close(), screen.close()]);
-    await Promise.all(
-      [userData, dumps.dir].map((dir) => rm(dir, { recursive: true, force: true }))
-    );
-    throw error;
-  });
+  ).catch((error) => scrap(error, screen.close));
   const untrack = track(child, [userData, dumps.dir], [screen.child].filter(Boolean));
   const cdp = await connect(pipe(child.stdio[3], child.stdio[4]), {
     exited,
