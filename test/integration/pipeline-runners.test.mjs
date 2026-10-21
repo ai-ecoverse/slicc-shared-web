@@ -126,11 +126,37 @@ test('context takes the diff from git and survives an API quota running out', ()
   assert.doesNotMatch(text, /search_artifacts: true/);
 });
 
-test('timings come from the latest merge queue run, else the latest pull request run', () => {
-  const test = jobs().test.join('\n');
-  assert.match(test, /id: queued[\s\S]*?event: merge_group/);
+test('lint plans the split once from the latest merge queue run, else the latest pull request run', () => {
+  const lint = jobs().lint.join('\n');
+  assert.match(lint, /id: queued[\s\S]*?event: merge_group/);
   assert.match(
-    test,
-    /if: steps\.queued\.outputs\.found_artifact != 'true'[\s\S]*?event: pull_request/
+    lint,
+    /if: [^\n]*steps\.queued\.outputs\.found_artifact != 'true'[\s\S]*?event: pull_request/
   );
+  assert.match(lint, /split: \$\{\{ steps\.split\.outputs\.split \}\}/);
+  assert.match(lint, /id: split\n {8}if: [^\n]+\n {8}shell: bash\n/);
+  const test = jobs().test.join('\n');
+  assert.doesNotMatch(test, /action-download-artifact|split-tests-by-timings/);
+  assert.match(test, /FILES: \$\{\{ fromJSON\(needs\.lint\.outputs\.split\)\[matrix\.shard\] \}\}/);
+});
+
+test('integration fails when a test-glob file ran on no shard or on two', () => {
+  const integration = jobs().integration.join('\n');
+  assert.match(integration, /needs: \[lint, test\]/);
+  assert.match(integration, /FILES: \$\{\{ needs\.lint\.outputs\.files \}\}/);
+  assert.match(integration, /ran on no shard/);
+  assert.match(integration, /ran on more than one shard/);
+});
+
+test("an issue post can't open in another repo becomes a pull request comment", () => {
+  const post = jobs().post.join('\n');
+  assert.match(post, /if \(target === repo\) \{\s*failed = true;/);
+  assert.match(post, /wanted to open an issue in \$\{target\} but couldn't/);
+});
+
+test('reviewers get the head with full history and keep their files outside the checkout', () => {
+  const reviewer = jobs().reviewer.join('\n');
+  assert.match(reviewer, /uses: actions\/checkout@\S+\n\s+with:\n\s+fetch-depth: 0/);
+  assert.doesNotMatch(reviewer, /(^|[\s"'(])review\/(?!name)/m);
+  assert.match(reviewer, /--add-dir \$\{\{ runner\.temp \}\}\/review/);
 });

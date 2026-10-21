@@ -8,16 +8,25 @@ if [ -f "$own" ]; then
   esac
 fi
 git config core.hooksPath "$(git rev-parse --show-prefix).githooks"
-n="${GIT_CONFIG_COUNT:-0}"
-(
-  export "GIT_CONFIG_COUNT=$((n + 1))" "GIT_CONFIG_KEY_$n=core.hooksPath" "GIT_CONFIG_VALUE_$n=$(pwd -P)/node_modules/.git-hooks"
-  lefthook install --force "$@"
-)
-mkdir -p .githooks
-for hook in node_modules/.git-hooks/*; do
-  name="${hook##*/}"
-  case "$name" in *.*) continue ;; esac
-  if [ ! -f "$hook" ] || [ -e ".githooks/$name" ]; then continue; fi
+config="$(lefthook dump)"
+githooks=" applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg commit-msg post-commit pre-rebase post-checkout post-merge pre-push pre-receive update proc-receive post-receive post-update reference-transaction push-to-checkout pre-auto-gc post-rewrite sendemail-validate fsmonitor-watchman p4-changelist p4-prepare-changelist p4-post-changelist p4-pre-submit post-index-change "
+mkdir -p node_modules/.git-hooks .githooks
+for name in $(printf '%s\n' "$config" | sed -n 's/^\([a-z][a-z0-9-]*\):.*/\1/p'); do
+  case "$githooks" in *" $name "*) ;; *) continue ;; esac
+  hook="node_modules/.git-hooks/$name"
+  sed "s/@HOOK@/$name/g" >"$hook" <<'HOOK'
+#!/bin/sh
+if [ "${LEFTHOOK_VERBOSE:-}" = 1 ] || [ "${LEFTHOOK_VERBOSE:-}" = true ]; then set -x; fi
+modules="$(cd "${0%/*}/.." && pwd -P)"
+os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+cpu="$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x64/')"
+lefthook="$modules/lefthook-$os-$cpu/bin/lefthook"
+[ -x "$lefthook" ] || lefthook="$modules/.bin/lefthook"
+[ -x "$lefthook" ] || { echo "@HOOK@: run npm install" >&2; exit 1; }
+exec "$lefthook" run --no-auto-install "@HOOK@" "$@"
+HOOK
+  chmod +x "$hook"
+  [ ! -e ".githooks/$name" ] || continue
   cat >".githooks/$name" <<'SHIM'
 #!/bin/sh
 hook="${0%/*}/../node_modules/.git-hooks/${0##*/}"

@@ -61,6 +61,26 @@ test('runs only the listed files and writes their JUnit report', async () => {
   assert.doesNotMatch(junit, /name="a"/);
 });
 
+test('lists the files it hands to node --test next to the JUnit report', async () => {
+  const dir = await fixture();
+  await mkdir(join(dir, 'lib'));
+  await writeFile(
+    join(dir, 'lib', 'cases.mjs'),
+    "import { test } from 'node:test';\nexport const cases = () => test('shared', () => {});\n"
+  );
+  await writeFile(join(dir, 'd.test.mjs'), "import { cases } from './lib/cases.mjs';\ncases();\n");
+  await run(process.execPath, ['--test', '*.test.mjs'], {
+    cwd: dir,
+    env: {
+      ...shardEnv(dir, ['b.test.mjs', 'd.test.mjs']),
+      SLICC_TEST_JUNIT: join(dir, 'junit.xml'),
+    },
+  });
+  const lists = (await readdir(dir)).filter((name) => name.endsWith('.files'));
+  assert.equal(lists.length, 1, lists.join());
+  assert.equal(await readFile(join(dir, lists[0]), 'utf8'), 'b.test.mjs\nd.test.mjs\n');
+});
+
 test('leaves a nested node --test alone', async () => {
   const dir = await fixture();
   const { stdout } = await run(process.execPath, ['--test', '*.test.mjs'], {
@@ -109,7 +129,7 @@ async function split(command, { all, shards, fail = false }) {
       () => 0,
       (error) => error.code
     );
-    const reports = await readdir(junitDir);
+    const reports = (await readdir(junitDir)).filter((name) => name.endsWith('.xml'));
     const xml = (
       await Promise.all(reports.map((name) => readFile(join(junitDir, name), 'utf8')))
     ).join();
