@@ -68,3 +68,45 @@ test("a caller's command fails on its first failing line, pipes included", () =>
   assert.equal(calls.length, 5, calls.map((m) => m[0]).join());
   for (const [call] of calls) assert.match(call, /^bash -eo pipefail -c /, call);
 });
+
+test('tests run on pull requests and in the merge queue, and a release only on a push to main', () => {
+  const both = "(github.event_name == 'pull_request' || github.event_name == 'merge_group')";
+  for (const name of ['test', 'integration', 'review']) {
+    assert.ok(value(jobs()[name], 'if').startsWith(both), name);
+  }
+  assert.equal(
+    value(jobs().release, 'if'),
+    "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+  );
+});
+
+test('integration needs a test in the JUnit reports, and node-options adds to the shard preload', () => {
+  const integration = jobs().integration.join('\n');
+  assert.match(integration, /pattern: junit-\*/);
+  assert.match(integration, /integration: FAIL/);
+  assert.match(text, /SLICC_TEST_NODE_OPTIONS="\$\{NODE_OPTIONS:-\} \$EXTRA_NODE_OPTIONS"/);
+});
+
+test('only post gets the Cloudflare token, for the reviewers screenshots', () => {
+  const holders = Object.entries(jobs())
+    .filter(([, lines]) => lines.some((line) => line.includes('secrets.CLOUDFLARE_API_TOKEN')))
+    .map(([name]) => name);
+  assert.deepEqual(holders, ['post']);
+});
+
+test('every review browser runs the harness extension', () => {
+  const reviewer = jobs().reviewer.join('\n');
+  assert.match(reviewer, /--load-extension="\$extension"/);
+  assert.match(reviewer, /slicc-shared-web\/harness\/extension/);
+});
+
+test('deploy exports none of the secrets the pipeline declares for its own jobs', () => {
+  const declared = [
+    ...text
+      .slice(text.indexOf('    secrets:\n'), text.indexOf('\npermissions:'))
+      .matchAll(/^ {6}([A-Z_]+):$/gm),
+  ].map((m) => m[1]);
+  assert.ok(declared.includes('CLOUDFLARE_API_TOKEN'), declared.join());
+  const own = /const own = new Set\(\[([^\]]*)\]\)/.exec(jobs().deploy.join('\n'))[1];
+  for (const name of declared) assert.match(own, new RegExp(`'${name}'`), name);
+});
