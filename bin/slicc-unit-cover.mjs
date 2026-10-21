@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,6 +24,35 @@ function run(command, args, env) {
   const result = spawnSync(command, args, { cwd: root, env, stdio: 'inherit' });
   if (result.error) throw result.error;
   return result.status ?? 1;
+}
+
+function bounded(command, args, env, ms) {
+  const child = spawn(command, args, { cwd: root, env, stdio: 'inherit', detached: true });
+  const kill = (signal) => {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {}
+  };
+  const forward = (signal) => () => kill(signal);
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'].map((name) => [name, forward(name)]);
+  for (const [name, handler] of signals) process.on(name, handler);
+  return new Promise((resolve, reject) => {
+    let late = false;
+    const timer =
+      ms > 0
+        ? setTimeout(() => {
+            late = true;
+            kill('SIGKILL');
+          }, ms)
+        : undefined;
+    child.on('error', reject);
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      for (const [name, handler] of signals) process.off(name, handler);
+      if (late) kill('SIGKILL');
+      resolve({ status: status ?? 1, late });
+    });
+  });
 }
 
 function selection(staged) {
@@ -93,9 +122,17 @@ for (const [index, batch] of batches.entries()) {
     reports.push(join(env.SLICC_UNIT_COVERAGE_DIR, 'lcov.info'));
     say(`batch ${index + 1} of ${batches.length}: ${batch.length} files`);
   }
-  const status = run('npm', ['run', '--silent', 'test:unit'], env);
+  const limit = Number(process.env.SLICC_UNIT_BATCH_TIMEOUT ?? 600000);
+  const { status, late } = await bounded('npm', ['run', '--silent', 'test:unit'], env, limit);
+  const which = batches.length > 1 ? `batch ${index + 1} of ${batches.length}` : 'the unit tests';
+  if (late) {
+    const named = batch === undefined ? 'every unit test file' : batch.join(' ');
+    verdict(
+      false,
+      `${which} ran past ${limit}ms and ${batches.length > 1 ? 'was' : 'were'} killed (${named})${why()}`
+    );
+  }
   if (status !== 0) {
-    const which = batches.length > 1 ? `batch ${index + 1} of ${batches.length}` : 'the unit tests';
     verdict(false, `${which} failed (status ${status})${why()}`);
   }
 }
