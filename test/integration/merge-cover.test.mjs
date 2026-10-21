@@ -201,3 +201,34 @@ test('once a conflicted rebase has finished, the next commit is diff-covered as 
   assert.equal(later.status, 1, later.stdout + later.stderr);
   assert.match(later.stdout, /src\/a\.mjs \([\d.]+%\): Missing lines 3$/m);
 });
+
+test('a conflict resolution that drops a line both sides had runs the unit tests', async () => {
+  const fx = await fixture();
+  save(
+    fx.dir,
+    { 'src/m.mjs': "export const m = () => 'm';\nexport const shared = 1;\n" },
+    'shared'
+  );
+  git(fx.dir, ['switch', '-q', fx.main]);
+  git(fx.dir, ['merge', '-q', '--ff-only', 'side']);
+  save(
+    fx.dir,
+    { 'src/m.mjs': "export const m = () => 'main';\nexport const shared = 1;\n" },
+    'main'
+  );
+  git(fx.dir, ['switch', '-q', 'side']);
+  save(
+    fx.dir,
+    { 'src/m.mjs': "export const m = () => 'side';\nexport const shared = 1;\n" },
+    'side'
+  );
+  assert.notEqual(git(fx.dir, ['merge', '-q', '--no-ff', fx.main], false).status, 0);
+  stage(fx.dir, { 'src/m.mjs': "export const m = () => 'main';\n" });
+  const dropped = cover(fx);
+  assert.equal(dropped.status, 0, dropped.stdout + dropped.stderr);
+  assert.doesNotMatch(dropped.stdout, /no code staged/);
+  assert.match(
+    dropped.stdout,
+    /slicc-unit-cover: PASS 1 unit test files in 1 batch, diff coverage 100%/
+  );
+});
