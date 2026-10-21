@@ -1,8 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { stripTypeScriptTypes } from 'node:module';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parse } from 'acorn';
 import { ALL, BODY, describe } from './exports.mjs';
+import { compile } from './typescript.mjs';
 
 export const code = /\.(m|c)?(j|t)sx?$/;
 const tests = /\.test\.(m|c)?(j|t)sx?$/;
@@ -36,29 +36,9 @@ function walk(dir, found = []) {
   return found;
 }
 
-function quiet(fn) {
-  const emit = process.emitWarning;
-  process.emitWarning = () => undefined;
-  try {
-    return fn();
-  } finally {
-    process.emitWarning = emit;
-  }
-}
-
-function strip(source) {
-  return quiet(() => {
-    try {
-      return stripTypeScriptTypes(source);
-    } catch {
-      return stripTypeScriptTypes(source, { mode: 'transform' });
-    }
-  });
-}
-
 function program(file) {
   const raw = readFileSync(file, 'utf8');
-  const source = typed.test(file) ? strip(raw) : raw;
+  const source = typed.test(file) ? compile(raw, file).code : raw;
   const options = { ecmaVersion: 'latest', allowHashBang: true, allowAwaitOutsideFunction: true };
   try {
     return parse(source, { ...options, sourceType: 'module' });
