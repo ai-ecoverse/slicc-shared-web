@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { code, ParseError, select } from '../unit/graph.mjs';
 import { inject } from '../unit/inject.mjs';
+import { merged } from '../unit/merge.mjs';
 import { inSources } from '../unit/sources.mjs';
 
 const root = process.cwd();
@@ -75,9 +76,12 @@ function selection(staged) {
   }
 }
 
-const staged = (git('diff', '--cached', '--name-only', '--relative', '--no-renames', '-z') ?? '')
-  .split('\0')
-  .filter(Boolean);
+const merge = merged(root);
+const staged =
+  merge?.files ??
+  (git('diff', '--cached', '--name-only', '--relative', '--no-renames', '-z') ?? '')
+    .split('\0')
+    .filter(Boolean);
 if (
   process.env.SLICC_UNIT_ALL !== '1' &&
   !staged.some((file) => code.test(file) && inSources(file, root))
@@ -163,6 +167,16 @@ const lcov = (reports.length > 0 ? reports : [join('coverage', 'unit', 'lcov.inf
 const seen = new Set(lcov.match(/^SF:.*$/gm)?.map((line) => line.slice(3)) ?? []);
 const missing = measured.filter((file) => !seen.has(file));
 if (missing.length > 0) verdict(false, `no coverage was collected for ${missing.join(' ')}`);
-const covered = run(cover, reports, process.env);
+let args = reports;
+if (merge !== undefined) {
+  const diff = join(scratch, 'diff');
+  writeFileSync(diff, merge.diff);
+  args = [
+    ...(reports.length > 0 ? reports : [join('coverage', 'unit', 'lcov.info')]),
+    '--diff-file',
+    diff,
+  ];
+}
+const covered = run(cover, args, process.env);
 if (covered !== 0) verdict(false, `diff coverage is not 100% (${files} in ${counted})`);
 verdict(true, `${files} in ${counted}, diff coverage 100%`);
