@@ -99,3 +99,14 @@ test('every review browser runs the harness extension', () => {
   assert.match(reviewer, /--load-extension="\$extension"/);
   assert.match(reviewer, /slicc-shared-web\/harness\/extension/);
 });
+
+test('deploy exports none of the secrets the pipeline declares for its own jobs', () => {
+  const declared = [
+    ...text
+      .slice(text.indexOf('    secrets:\n'), text.indexOf('\npermissions:'))
+      .matchAll(/^ {6}([A-Z_]+):$/gm),
+  ].map((m) => m[1]);
+  assert.ok(declared.includes('CLOUDFLARE_API_TOKEN'), declared.join());
+  const own = /const own = new Set\(\[([^\]]*)\]\)/.exec(jobs().deploy.join('\n'))[1];
+  for (const name of declared) assert.match(own, new RegExp(`'${name}'`), name);
+});
