@@ -444,6 +444,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -464,12 +465,12 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: integration-*
-          path: review/integration
+          path: ${{ runner.temp }}/review/integration
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: context
-          path: review/context
+          path: ${{ runner.temp }}/review/context
 
       - name: Four browsers
         env:
@@ -514,8 +515,8 @@ jobs:
               port=$((port + 1))
             done
           done
-          echo "[${list%,}]" > "$GITHUB_WORKSPACE/review/browsers.json"
-          cat "$GITHUB_WORKSPACE/review/browsers.json"
+          echo "[${list%,}]" > "$RUNNER_TEMP/review/browsers.json"
+          cat "$RUNNER_TEMP/review/browsers.json"
 
       - name: Prompt
         env:
@@ -525,16 +526,16 @@ jobs:
           EXTRA: ${{ inputs.review-prompt }}
           SHOTS: ${{ inputs.review-screenshots }}
         run: |
-          mkdir -p review/shots
-          cat > review/prompt.txt <<EOF
+          mkdir -p "$RUNNER_TEMP/review/shots"
+          cat > "$RUNNER_TEMP/review/prompt.txt" <<EOF
           Review pull request $PR of $REPO.
 
           The working directory holds:
-          - .: the pull request's head, dependencies installed.
+          - .: the pull request's head, dependencies installed, with full history, so git diff BASE...HEAD and git log work (BASE is the base commit: git merge-base HEAD origin/BASE_REF, or the diff in $RUNNER_TEMP/review/context/pr.diff). Your scratch files go in $RUNNER_TEMP/review, never in the checkout.
           - $RUNNER_TEMP/base: its base, dependencies installed, to compare with.
-          - review/context/: the pull request (pr.json, pr.diff, files.txt, commits.txt, comments.json, reviews.json, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json). missing.txt names any the GitHub API wouldn't give; read those with gh if you need them.
-          - review/integration/: the integration tests' coverage, artifacts (screenshots, CPU profiles, crash dumps, console logs) and JUnit reports, one directory per shard.
-          - review/browsers.json: four running headed Chrome instances on the virtual display $DISPLAY, reachable over CDP, one per side (head, base) and link (extension, slicc-cli). The repository's review-browser hook, if it has one, loaded each side's build into them; without one they are bare Chrome. Each also runs slicc-shared-web's harness extension, a content script on every page and frame that sets data-slicc-harness-extension, standing in for the password managers and similar extensions real users have; it is expected, not a finding. Use them to compare the head's behaviour with the base's.
+          - $RUNNER_TEMP/review/context/: the pull request (pr.json, pr.diff, files.txt, commits.txt, comments.json, reviews.json, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json). missing.txt names any the GitHub API wouldn't give; read those with gh if you need them.
+          - $RUNNER_TEMP/review/integration/: the integration tests' coverage, artifacts (screenshots, CPU profiles, crash dumps, console logs) and JUnit reports, one directory per shard.
+          - $RUNNER_TEMP/review/browsers.json: four running headed Chrome instances on the virtual display $DISPLAY, reachable over CDP, one per side (head, base) and link (extension, slicc-cli). The repository's review-browser hook, if it has one, loaded each side's build into them; without one they are bare Chrome. Each also runs slicc-shared-web's harness extension, a content script on every page and frame that sets data-slicc-harness-extension, standing in for the password managers and similar extensions real users have; it is expected, not a finding. Use them to compare the head's behaviour with the base's.
           ${STAGING_URL:+- The service is deployed to staging at $STAGING_URL.}
 
           Read the change, run what you need, and decide whether it should be merged.
@@ -543,8 +544,8 @@ jobs:
           - summary: a few sentences on the change and your verdict.
           - comments: findings on lines the pull request adds or changes, with path relative to the repository root and the line number in the head.
           - issues: problems worth tracking outside this pull request, each with repo as owner/name, a title and a body.
-            Leave out any that review/context/issues.json already has open, even under another title.
-          Screenshots: when a finding is about what a page shows, save a PNG to review/shots/ (a name of letters, digits, dots, dashes or underscores; at most $SHOTS files) and put it in the summary, a comment or an issue body as ![what it shows](shots/name.png). They're published with your findings.
+            Leave out any that $RUNNER_TEMP/review/context/issues.json already has open, even under another title.
+          Screenshots: when a finding is about what a page shows, save a PNG to $RUNNER_TEMP/review/shots/ (a name of letters, digits, dots, dashes or underscores; at most $SHOTS files) and put it in the summary, a comment or an issue body as ![what it shows](shots/name.png). They're published with your findings.
 
           $EXTRA
           EOF
@@ -556,20 +557,21 @@ jobs:
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ vars.CERT_AWS_REGION || 'us-west-2' }}
         with:
-          prompt: Follow the instructions in review/prompt.txt.
+          prompt: Follow the instructions in ${{ runner.temp }}/review/prompt.txt.
           use_bedrock: 'true'
           github_token: ${{ github.token }}
           allowed_bots: renovate[bot]
           claude_args: >-
             --model ${{ vars.CERT_BEDROCK_MODEL || 'global.anthropic.claude-opus-5-5' }}
             --add-dir ${{ runner.temp }}/base
+            --add-dir ${{ runner.temp }}/review
             --allowedTools Bash,Read,Glob,Grep,WebFetch
             --json-schema '${{ env.FINDINGS_SCHEMA }}'
 
       - if: matrix.agent == 'claude'
         env:
           FINDINGS: ${{ steps.claude.outputs.structured_output }}
-        run: printf '%s' "$FINDINGS" > review/findings.json
+        run: printf '%s' "$FINDINGS" > "$RUNNER_TEMP/review/findings.json"
 
       - if: matrix.agent == 'codex'
         name: Codex on Bedrock
@@ -584,8 +586,8 @@ jobs:
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ vars.CERT_AWS_REGION || 'us-west-2' }}
         with:
-          prompt-file: review/prompt.txt
-          output-file: review/findings.json
+          prompt-file: ${{ runner.temp }}/review/prompt.txt
+          output-file: ${{ runner.temp }}/review/findings.json
           output-schema: ${{ env.FINDINGS_SCHEMA }}
           codex-home: ${{ runner.temp }}/codex-home
           model: ${{ vars.CODEX_BEDROCK_MODEL || 'global.openai.gpt-6.1-sol' }}
@@ -598,8 +600,8 @@ jobs:
         with:
           name: findings-${{ matrix.agent }}
           path: |
-            review/findings.json
-            review/shots/
+            ${{ runner.temp }}/review/findings.json
+            ${{ runner.temp }}/review/shots/
           if-no-files-found: ignore
 
   post:
