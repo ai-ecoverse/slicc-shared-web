@@ -34,7 +34,7 @@
   "bin": {
     "slicc-agents-md": "bin/slicc-agents-md.sh",
     "slicc-diff-cover": "bin/slicc-diff-cover.sh",
-    "slicc-install-hooks": "bin/slicc-install-hooks.sh",
+    "slicc-install-hooks": "bin/slicc-install-hooks.mjs",
     "slicc-lint": "bin/slicc-lint.sh",
     "slicc-lint-comments": "bin/slicc-lint-comments.sh",
     "slicc-memory-peak": "bin/slicc-memory-peak.sh",
@@ -54,7 +54,7 @@
     "unit"
   ],
   "scripts": {
-    "prepare": "bin/slicc-install-hooks.sh",
+    "prepare": "node bin/slicc-install-hooks.mjs",
     "lint": "bin/slicc-lint.sh && shellcheck bin/*.sh",
     "pretest": "slicc-cdp install-browser",
     "test": "SLICC_PROFILE=1 node --test --test-global-setup=harness/global.mjs test/integration/*.test.mjs && node test/integration/verify.mjs",
