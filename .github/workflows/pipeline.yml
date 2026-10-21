@@ -48,6 +48,12 @@ on:
       require-tests:
         type: boolean
         default: true
+      review-timeout-minutes:
+        type: number
+        default: 60
+      review-screenshots:
+        type: number
+        default: 30
       release-environment:
         type: string
         default: ''
@@ -351,7 +357,7 @@ jobs:
     needs: [lint, test, deploy, context]
     if: needs.lint.outputs.review == 'true' && needs.lint.outputs.bedrock == 'true' && !cancelled() && needs.test.result != 'skipped' && needs.context.result == 'success' && needs.deploy.result != 'failure'
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ inputs.review-timeout-minutes }}
     permissions:
       contents: read
       issues: read
@@ -442,6 +448,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           STAGING_URL: ${{ needs.deploy.outputs.url }}
           EXTRA: ${{ inputs.review-prompt }}
+          SHOTS: ${{ inputs.review-screenshots }}
         run: |
           mkdir -p review/shots
           cat > review/prompt.txt <<EOF
@@ -462,7 +469,7 @@ jobs:
           - comments: findings on lines the pull request adds or changes, with path relative to the repository root and the line number in the head.
           - issues: problems worth tracking outside this pull request, each with repo as owner/name, a title and a body.
             Leave out any that review/context/issues.json already has open, even under another title.
-          Screenshots: when a finding is about what a page shows, save a PNG to review/shots/ (a name of letters, digits, dots, dashes or underscores; at most 20 files) and put it in the summary, a comment or an issue body as ![what it shows](shots/name.png). They're published with your findings.
+          Screenshots: when a finding is about what a page shows, save a PNG to review/shots/ (a name of letters, digits, dots, dashes or underscores; at most $SHOTS files) and put it in the summary, a comment or an issue body as ![what it shows](shots/name.png). They're published with your findings.
 
           $EXTRA
           EOF
