@@ -75,24 +75,22 @@ test('headed browsers launched side by side each run on a display of their own',
 test('a display that fails to start leaves no server or directory behind', {
   skip: platform !== 'linux' && 'needs Linux',
 }, async () => {
-  const { mkdtemp, writeFile, chmod, readdir, rm } = await import('node:fs/promises');
+  const { chmod, mkdtemp, readdir, rm, writeFile } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const { execFile } = await import('node:child_process');
   const bin = await mkdtemp(join(tmpdir(), 'slicc-fake-xvfb-'));
+  const temp = await mkdtemp(join(tmpdir(), 'slicc-fake-xvfb-tmp-'));
   try {
     await writeFile(join(bin, 'Xvfb'), '#!/bin/sh\nexit 1\n');
     await chmod(join(bin, 'Xvfb'), 0o755);
-    const before = new Set(
-      (await readdir(tmpdir())).filter((name) => name.startsWith('slicc-harness-'))
-    );
     const harness = new URL('../../harness/index.mjs', import.meta.url).href;
     const script = `const { launch } = await import(${JSON.stringify(harness)});
       await launch({ roots: [['/', 'test/integration/page/']], headless: false, coverage: [] }).then(
         () => { console.log('launched'); process.exit(2); },
         (error) => { console.log(error.message.split('\\n')[0]); }
       );`;
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, CI: 'true' };
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, CI: 'true', TMPDIR: temp };
     delete env.DISPLAY;
     delete env.NODE_TEST_CONTEXT;
     const out = await new Promise((resolve, reject) => {
@@ -104,11 +102,9 @@ test('a display that fails to start leaves no server or directory behind', {
       );
     });
     assert.match(out, /Xvfb exited with 1/);
-    const after = (await readdir(tmpdir())).filter(
-      (name) => name.startsWith('slicc-harness-') && !before.has(name)
-    );
-    assert.deepEqual(after, []);
+    assert.deepEqual(await readdir(temp), []);
   } finally {
     await rm(bin, { recursive: true, force: true });
+    await rm(temp, { recursive: true, force: true });
   }
 });
