@@ -54,7 +54,7 @@
     "unit"
   ],
   "scripts": {
-    "prepare": "bin/slicc-install-hooks.mjs",
+    "prepare": "node bin/slicc-install-hooks.mjs",
     "lint": "bin/slicc-lint.sh && shellcheck bin/*.sh",
     "pretest": "slicc-cdp install-browser",
     "test": "SLICC_PROFILE=1 node --test --test-global-setup=harness/global.mjs test/integration/*.test.mjs && node test/integration/verify.mjs",
