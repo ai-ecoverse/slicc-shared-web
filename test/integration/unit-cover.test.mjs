@@ -678,3 +678,25 @@ test('a leaked child process holding the runner output open is ended by the batc
   });
   assert.equal(left.stdout, '', 'the leaked child is gone');
 });
+
+test('a leaked child that does not hold the runner open is killed with the batch once the guard ends its file', async () => {
+  const dir = await fixture({
+    ...js,
+    'test/unit/a.test.mjs': unit(
+      'a',
+      "import { spawn } from 'node:child_process';\nimport { a } from '../../src/a.mjs';\na(1);\ntest('child', () => {\n  spawn(process.execPath, ['-e', 'setInterval(() => {}, 1001)'], { stdio: 'ignore' });\n});"
+    ),
+  });
+  change(dir, { 'src/a.mjs': 'export const a = (x) => x + 2;\n' });
+  const run = await bounded(dir, { SLICC_UNIT_TIMEOUT: '1000' }, 45_000);
+  assert.equal(run.signal, null, 'the hook hung on the child process');
+  const [line] = verdicts(run);
+  assert.match(
+    line,
+    /^slicc-unit-cover: FAIL the unit tests failed \(status 1\): test\/unit\/a\.test\.mjs was still running 1000ms after its tests ended, open handles kept it alive \(.*ProcessWrap.*\)$/
+  );
+  const left = spawnSync('pgrep', ['-f', 'setInterval\\(\\(\\) => \\{\\}, 1001\\)'], {
+    encoding: 'utf8',
+  });
+  assert.equal(left.stdout, '', 'the leaked child is gone');
+});
