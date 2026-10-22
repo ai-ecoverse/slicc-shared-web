@@ -51,6 +51,9 @@ export function headlessByDefault(env = inherited) {
   return !env.CI || env.CI === 'false' || env.CI === '0';
 }
 
+export const modeFlags = (headless) =>
+  headless ? ['--headless=new'] : ['--enable-unsafe-swiftshader'];
+
 export function commandLine(
   profile,
   extensions = [],
@@ -66,7 +69,7 @@ export function commandLine(
   ]);
   const base = flags.filter((flag) => !dropped.has(flag));
   const load = loaded ? ['--enable-unsafe-extension-debugging'] : [];
-  const mode = headless && !realistic ? ['--headless=new'] : ['--enable-unsafe-swiftshader'];
+  const mode = modeFlags(headless && !realistic);
   return [...mode, ...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
 }
 

@@ -1,5 +1,6 @@
 export { connect } from './cdp.mjs';
-export { launch } from './chrome.mjs';
+export { headlessByDefault, launch, modeFlags } from './chrome.mjs';
+export { screenFor } from './display.mjs';
 export {
   BUILTIN_ID as EXTENSION_ID,
   BUILTIN_PATH as EXTENSION_PATH,
