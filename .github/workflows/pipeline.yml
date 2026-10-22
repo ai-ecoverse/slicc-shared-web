@@ -476,6 +476,9 @@ jobs:
       contents: read
       issues: read
       pull-requests: read
+    env:
+      # renovate: datasource=npm depName=@anthropic-ai/claude-code
+      CLAUDE_VERSION: 2.1.303
     strategy:
       fail-fast: false
       matrix:
@@ -589,6 +592,24 @@ jobs:
           $EXTRA
           EOF
 
+      - if: matrix.agent == 'claude'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/claude-npm
+          key: claude-code-${{ runner.os }}-${{ runner.arch }}-${{ env.CLAUDE_VERSION }}
+
+      - if: matrix.agent == 'claude'
+        name: Claude Code
+        run: |
+          for attempt in 1 2 3 4 5; do
+            npm install --prefix "$RUNNER_TEMP/claude-code" --cache "$RUNNER_TEMP/claude-npm" --prefer-offline --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_VERSION" \
+              && "$RUNNER_TEMP/claude-code/node_modules/.bin/claude" --version && exit 0
+            [ "$attempt" = 5 ] && break
+            echo "::warning title=Claude Code::npm install of @anthropic-ai/claude-code@$CLAUDE_VERSION failed, attempt $attempt of 5"
+            sleep $((15 << attempt))
+          done
+          exit 1
+
       - id: claude
         if: matrix.agent == 'claude'
         uses: anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6
@@ -599,6 +620,7 @@ jobs:
           prompt: Follow the instructions in ${{ runner.temp }}/review/prompt.txt.
           use_bedrock: 'true'
           github_token: ${{ github.token }}
+          path_to_claude_code_executable: ${{ runner.temp }}/claude-code/node_modules/.bin/claude
           allowed_bots: renovate[bot]
           claude_args: >-
             --model ${{ vars.CERT_BEDROCK_MODEL || 'global.anthropic.claude-opus-5-5' }}
