@@ -43,7 +43,25 @@ function verdictOf() {
   return validate(raw, head);
 }
 
-async function tidy() {
+async function dismiss() {
+  let dismissed = 0;
+  for (let page = 1; page <= 10; page++) {
+    const reviews = await gh.call(`pulls/${n}/reviews?per_page=100&page=${page}`);
+    for (const rv of reviews) {
+      if (rv.state !== 'CHANGES_REQUESTED' || rv.user?.login !== 'github-actions[bot]') continue;
+      if (!rv.body?.includes(MARKER)) continue;
+      await gh.call(`pulls/${n}/reviews/${rv.id}/dismissals`, 'PUT', {
+        message: `superseded by cert-review on ${head.slice(0, 7)}`,
+        event: 'DISMISS',
+      });
+      dismissed++;
+    }
+    if (reviews.length < 100) break;
+  }
+  console.log(`tidied: dismissed ${dismissed} earlier cert-review reviews`);
+}
+
+async function resolveThreads() {
   const q =
     'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{id isResolved comments(first:1){nodes{author{login} body}}}}}}}';
   const [o, r] = env.GITHUB_REPOSITORY.split('/');
@@ -67,23 +85,7 @@ async function tidy() {
     if (!t.pageInfo.hasNextPage) break;
     cursor = t.pageInfo.endCursor;
   }
-  let dismissed = 0;
-  for (let page = 1; page <= 10; page++) {
-    const reviews = await gh.call(`pulls/${n}/reviews?per_page=100&page=${page}`);
-    for (const rv of reviews) {
-      if (rv.state !== 'CHANGES_REQUESTED' || rv.user?.login !== 'github-actions[bot]') continue;
-      if (!rv.body?.includes(MARKER)) continue;
-      await gh.call(`pulls/${n}/reviews/${rv.id}/dismissals`, 'PUT', {
-        message: `superseded by cert-review on ${head.slice(0, 7)}`,
-        event: 'DISMISS',
-      });
-      dismissed++;
-    }
-    if (reviews.length < 100) break;
-  }
-  console.log(
-    `tidied: resolved ${resolved} earlier cert-review threads, dismissed ${dismissed} reviews`
-  );
+  console.log(`tidied: resolved ${resolved} earlier cert-review threads`);
 }
 
 async function current() {
@@ -103,9 +105,14 @@ async function current() {
 
 async function tidySafely() {
   try {
-    await tidy();
+    await dismiss();
   } catch (err) {
-    console.log(`::warning title=cert-review::tidying earlier reviews failed: ${err.message}`);
+    console.log(`::warning title=cert-review::dismissing earlier reviews failed: ${err.message}`);
+  }
+  try {
+    await resolveThreads();
+  } catch (err) {
+    console.log(`::warning title=cert-review::resolving earlier threads failed: ${err.message}`);
   }
 }
 
