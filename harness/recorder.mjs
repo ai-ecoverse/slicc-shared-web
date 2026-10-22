@@ -10,6 +10,7 @@ import { bounded, ignore, raw, samples, sleep, TIMED_OUT } from './util.mjs';
 const Util = mcrUtil.Util ?? mcrUtil.default;
 
 const profiled = new Set(['page', 'worker', 'service_worker', 'shared_worker']);
+const unheld = ['service_worker', 'shared_worker'];
 const sampling = [['Profiler.setSamplingInterval', { interval: 100 }], ['Profiler.start']];
 const unloading = 'sliccHarnessUnload';
 const unload = `addEventListener('beforeunload', function ${unloading}() { debugger; })`;
@@ -174,6 +175,19 @@ export function ownership(parents) {
       waiting.delete(sessionId);
     },
   };
+}
+
+export function autoAttach({ coverage = ['/'], profiling } = {}) {
+  const attach = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+  if (coverage.length > 0 || profiling) return attach;
+  const skipped = [...unheld, 'browser', 'tab'].map((type) => ({ type, exclude: true }));
+  return { ...attach, filter: [...skipped, {}] };
+}
+
+export function unpaused(cdp, { method, params }) {
+  if (method !== 'Target.targetCreated' || !unheld.includes(params.targetInfo.type)) return null;
+  const { targetId } = params.targetInfo;
+  return cdp.send('Target.attachToTarget', { targetId, flatten: true }).catch(ignore);
 }
 
 export function retain(scripts, result) {

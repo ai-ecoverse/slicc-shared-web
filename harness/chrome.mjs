@@ -18,7 +18,7 @@ import {
   unpacked,
 } from './extensions.mjs';
 import { page } from './page.mjs';
-import { breakpoints, recorder } from './recorder.mjs';
+import { autoAttach, breakpoints, recorder, unpaused } from './recorder.mjs';
 import { serve } from './server.mjs';
 import { artifacts, bounded, ignore, sleep, slug, TIMED_OUT } from './util.mjs';
 
@@ -362,11 +362,9 @@ export async function launch({
   });
   const remote = await cdn(cdp, intercept);
   await cdp.send('Target.setDiscoverTargets', { discover: true });
-  await cdp.send('Target.setAutoAttach', {
-    autoAttach: true,
-    waitForDebuggerOnStart: true,
-    flatten: true,
-  });
+  const attaching = autoAttach({ coverage, profiling: profile });
+  if (attaching.filter) cdp.on((event) => unpaused(cdp, event));
+  await cdp.send('Target.setAutoAttach', attaching);
   const harnessExtension = await (async () => {
     const own = builtin ? await installBuiltin(cdp) : null;
     await install(cdp, found);
