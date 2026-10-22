@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -171,6 +173,78 @@ test('post downloads each reviewer findings by name, so one missing reviewer doe
     );
   }
   assert.doesNotMatch(post, /pattern: findings-/);
+});
+
+function steps(lines) {
+  const found = [];
+  for (const line of lines) {
+    if (/^ {6}- /.test(line)) found.push([]);
+    if (found.length) found.at(-1).push(line);
+  }
+  return found;
+}
+
+const field = (step, key) =>
+  step.map((line) => new RegExp(`^ {10}${key}:\\s*(.+?)\\s*$`).exec(line)?.[1]).find(Boolean);
+
+function gate(uploaded) {
+  const all = steps(jobs().review);
+  const dir = mkdtempSync(`${tmpdir()}/review-gate-`);
+  try {
+    for (const step of all.filter((s) => s.some((l) => l.includes('actions/download-artifact@')))) {
+      const path = field(step, 'path');
+      const name = field(step, 'name');
+      const pattern = field(step, 'pattern');
+      const glob = pattern && new RegExp(`^${pattern.replaceAll('*', '.*')}$`);
+      const matches = Object.keys(uploaded).filter((key) => (name ? key === name : glob.test(key)));
+      for (const match of matches) {
+        const to = name || matches.length === 1 ? `${dir}/${path}` : `${dir}/${path}/${match}`;
+        mkdirSync(to, { recursive: true });
+        writeFileSync(`${to}/findings.json`, JSON.stringify({ verdict: uploaded[match] }));
+      }
+    }
+    const run = all.find((s) => s.some((l) => l.includes('for agent in claude codex')));
+    const script = run
+      .slice(run.findIndex((l) => /^ {8}run: \|$/.test(l)) + 1)
+      .map((l) => l.slice(10))
+      .join('\n');
+    return spawnSync('bash', ['-e', '-c', script], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        EVENT: 'pull_request',
+        REVIEW: 'true',
+        BEDROCK: 'true',
+        FORK: 'false',
+      },
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('the review gate reads the surviving verdict when only one reviewer uploaded findings', () => {
+  const cases = [
+    [{ 'findings-codex': 'approved' }, 'claude: no findings\ncodex: approved\n', 1],
+    [{ 'findings-claude': 'approved' }, 'claude: approved\ncodex: no findings\n', 1],
+    [
+      { 'findings-claude': 'approved', 'findings-codex': 'changes_requested' },
+      'claude: approved\ncodex: changes_requested\n',
+      1,
+    ],
+    [
+      { 'findings-claude': 'approved', 'findings-codex': 'approved' },
+      'claude: approved\ncodex: approved\n',
+      0,
+    ],
+  ];
+  for (const [uploaded, stdout, status] of cases) {
+    const result = gate(uploaded);
+    assert.equal(result.stdout, stdout, result.stderr);
+    assert.equal(result.status, status);
+  }
+  assert.doesNotMatch(jobs().review.join('\n'), /pattern: findings-/);
 });
 
 test('the Claude reviewer runs Claude Code installed from npm, not from the rate-limited installer', () => {
