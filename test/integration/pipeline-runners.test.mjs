@@ -172,3 +172,15 @@ test('post downloads each reviewer findings by name, so one missing reviewer doe
   }
   assert.doesNotMatch(post, /pattern: findings-/);
 });
+
+test('the Claude reviewer runs Claude Code installed from npm, not from the rate-limited installer', () => {
+  const reviewer = jobs().reviewer.join('\n');
+  assert.match(
+    reviewer,
+    /npm install --prefix "\$RUNNER_TEMP\/claude-code"[^\n]*@anthropic-ai\/claude-code@\$CLAUDE_CODE/
+  );
+  assert.match(
+    reviewer,
+    /path_to_claude_code_executable: \$\{\{ steps\.claude-code\.outputs\.path \}\}/
+  );
+});

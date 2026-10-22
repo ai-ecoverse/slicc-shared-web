@@ -589,6 +589,16 @@ jobs:
           $EXTRA
           EOF
 
+      - id: claude-code
+        if: matrix.agent == 'claude'
+        env:
+          # renovate: datasource=npm depName=@anthropic-ai/claude-code
+          CLAUDE_CODE: 2.1.303
+        run: |
+          npm install --prefix "$RUNNER_TEMP/claude-code" --no-save --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_CODE"
+          "$RUNNER_TEMP/claude-code/node_modules/.bin/claude" --version
+          echo "path=$RUNNER_TEMP/claude-code/node_modules/.bin/claude" >> "$GITHUB_OUTPUT"
+
       - id: claude
         if: matrix.agent == 'claude'
         uses: anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6
@@ -598,6 +608,7 @@ jobs:
         with:
           prompt: Follow the instructions in ${{ runner.temp }}/review/prompt.txt.
           use_bedrock: 'true'
+          path_to_claude_code_executable: ${{ steps.claude-code.outputs.path }}
           github_token: ${{ github.token }}
           allowed_bots: renovate[bot]
           claude_args: >-
