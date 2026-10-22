@@ -173,3 +173,23 @@ test('the Claude reviewer runs Claude Code installed from npm, not from the rate
     /path_to_claude_code_executable: \$\{\{ steps\.claude-code\.outputs\.path \}\}/
   );
 });
+
+test('release gets only the secrets release-secrets names, and attests the attest files after a release', () => {
+  const release = jobs().release.join('\n');
+  assert.match(release, /permissions:\n(?: {6}[a-z-]+: \w+\n)* {6}attestations: write/);
+  const own = /const own = new Set\(\[([^\]]*)\]\)/.exec(release)[1];
+  for (const name of ['AWS_BEARER_TOKEN_BEDROCK', 'SLICC_ISSUES_TOKEN', 'CLOUDFLARE_API_TOKEN'])
+    assert.match(own, new RegExp(`'${name}'`));
+  assert.match(release, /if \(!own\.has\(key\) && only\.has\(key\)\)/);
+  assert.match(
+    release,
+    /if: inputs\.attest != '' && steps\.released\.outputs\.tag != ''\n {8}uses: actions\/attest-build-provenance@\w+\n {8}with:\n {10}subject-path: \$\{\{ inputs\.attest \}\}/
+  );
+});
+
+test("the README's caller grants every permission the pipeline's jobs ask for", () => {
+  const readme = readFileSync(`${root}/README.md`, 'utf8');
+  const granted = /\npermissions:\n((?: {2}[a-z-]+: \w+\n)+)/.exec(readme)[1];
+  const asked = new Set([...text.matchAll(/^ {6}([a-z-]+): write$/gm)].map((m) => m[1]));
+  for (const name of asked) assert.match(granted, new RegExp(`^ {2}${name}: write$`, 'm'), name);
+});
