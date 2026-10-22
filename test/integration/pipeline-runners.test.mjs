@@ -162,6 +162,17 @@ test('reviewers get the head with full history and keep their files outside the 
   assert.match(reviewer, /--add-dir \$\{\{ runner\.temp \}\}\/review/);
 });
 
+test('post downloads each reviewer findings by name, so one missing reviewer does not hide the other', () => {
+  const post = jobs().post.join('\n');
+  for (const agent of ['claude', 'codex']) {
+    assert.match(
+      post,
+      new RegExp(`name: findings-${agent}\\n {10}path: findings/findings-${agent}`)
+    );
+  }
+  assert.doesNotMatch(post, /pattern: findings-/);
+});
+
 test('the Claude reviewer runs Claude Code installed from npm, not from the rate-limited installer', () => {
   const reviewer = jobs().reviewer.join('\n');
   assert.match(
