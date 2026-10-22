@@ -18,3 +18,9 @@ test('headless adds --headless=new, and realistic is always headed', () => {
   assert.ok(!commandLine('/p', [], [], false, false, false).includes('--headless=new'));
   assert.ok(!commandLine('/p', [], [], true, false, true).includes('--headless=new'));
 });
+
+test('a headed Chrome may fall back to SwiftShader, so WebGL works on a display without a GPU', () => {
+  assert.ok(commandLine('/p', [], [], false, false, false).includes('--enable-unsafe-swiftshader'));
+  assert.ok(commandLine('/p', [], [], true, false, true).includes('--enable-unsafe-swiftshader'));
+  assert.ok(!commandLine('/p', [], [], false, false, true).includes('--enable-unsafe-swiftshader'));
+});
