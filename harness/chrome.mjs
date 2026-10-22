@@ -361,9 +361,9 @@ export async function launch({
     profiling: profile,
   });
   const remote = await cdn(cdp, intercept);
-  await cdp.send('Target.setDiscoverTargets', { discover: true });
   const attaching = autoAttach({ coverage, profiling: profile });
   if (attaching.filter) cdp.on((event) => unpaused(cdp, event));
+  await cdp.send('Target.setDiscoverTargets', { discover: true });
   await cdp.send('Target.setAutoAttach', attaching);
   const harnessExtension = await (async () => {
     const own = builtin ? await installBuiltin(cdp) : null;
