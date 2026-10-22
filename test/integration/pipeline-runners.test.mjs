@@ -161,3 +161,15 @@ test('reviewers get the head with full history and keep their files outside the 
   assert.doesNotMatch(reviewer, /(^|[\s"'(])review\/(?!name)/m);
   assert.match(reviewer, /--add-dir \$\{\{ runner\.temp \}\}\/review/);
 });
+
+test('the Claude reviewer runs Claude Code installed from npm, not from the rate-limited installer', () => {
+  const reviewer = jobs().reviewer.join('\n');
+  assert.match(
+    reviewer,
+    /npm install --prefix "\$RUNNER_TEMP\/claude-code"[^\n]*@anthropic-ai\/claude-code@\$CLAUDE_CODE/
+  );
+  assert.match(
+    reviewer,
+    /path_to_claude_code_executable: \$\{\{ steps\.claude-code\.outputs\.path \}\}/
+  );
+});
