@@ -24,3 +24,14 @@ test('a headed Chrome may fall back to SwiftShader, so WebGL works on a display 
   assert.ok(commandLine('/p', [], [], true, false, true).includes('--enable-unsafe-swiftshader'));
   assert.ok(!commandLine('/p', [], [], false, false, true).includes('--enable-unsafe-swiftshader'));
 });
+
+test('the harness exports what a repo launching its own Chrome needs to match it', async () => {
+  const harness = await import('@ai-ecoverse/slicc-shared-web/harness');
+  assert.equal(harness.headlessByDefault({ CI: 'true' }), false);
+  assert.equal(harness.headlessByDefault({}), true);
+  assert.deepEqual(harness.modeFlags(true), ['--headless=new']);
+  assert.deepEqual(harness.modeFlags(false), ['--enable-unsafe-swiftshader']);
+  const screen = await harness.screenFor(false, { CI: 'true' });
+  assert.equal(screen.child, null);
+  await screen.close();
+});
