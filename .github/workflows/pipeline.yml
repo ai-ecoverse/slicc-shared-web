@@ -654,9 +654,16 @@ jobs:
       statuses: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        continue-on-error: true
         with:
-          pattern: findings-*
-          path: findings
+          name: findings-claude
+          path: findings/findings-claude
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        continue-on-error: true
+        with:
+          name: findings-codex
+          path: findings/findings-codex
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
