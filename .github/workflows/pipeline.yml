@@ -60,6 +60,12 @@ on:
       after-release:
         type: string
         default: ''
+      release-secrets:
+        type: string
+        default: ''
+      attest:
+        type: string
+        default: ''
     secrets:
       AWS_BEARER_TOKEN_BEDROCK:
         required: false
@@ -860,6 +866,7 @@ jobs:
       issues: write
       pull-requests: write
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -871,6 +878,20 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Release secrets as environment variables
+        if: inputs.release-secrets != ''
+        env:
+          SECRETS: ${{ toJSON(secrets) }}
+          RELEASE_SECRETS: ${{ inputs.release-secrets }}
+        run: |
+          node --input-type=module >> "$GITHUB_ENV" <<'EOF'
+          const own = new Set(['github_token', 'AWS_BEARER_TOKEN_BEDROCK', 'SLICC_ISSUES_TOKEN', 'CLOUDFLARE_API_TOKEN']);
+          const only = new Set(process.env.RELEASE_SECRETS.toUpperCase().split(/\s+/).filter(Boolean));
+          for (const [key, value] of Object.entries(JSON.parse(process.env.SECRETS))) {
+            if (!own.has(key) && only.has(key)) process.stdout.write(`${key}<<SLICC_EOF\n${value}\nSLICC_EOF\n`);
+          }
+          EOF
 
       - name: semantic-release
         env:
@@ -897,6 +918,19 @@ jobs:
           EOF
           chmod +x "$shim/git"
           REAL_GIT="$(command -v git)" PATH="$shim:$PATH" npx semantic-release
+
+      - id: released
+        if: inputs.attest != ''
+        run: |
+          git fetch --tags --force --quiet origin
+          tag=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -1)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          [ -n "$tag" ] || echo "no release on $GITHUB_SHA, so nothing to attest"
+
+      - if: inputs.attest != '' && steps.released.outputs.tag != ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ inputs.attest }}
 
       - name: After release
         if: inputs.after-release != ''
