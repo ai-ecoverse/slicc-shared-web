@@ -83,6 +83,11 @@
       "enabled": false
     },
     {
+      "description": "slicc-shared-web moves as one: the npm package (harness/shard.cjs and the shared tooling) and the pipeline.yml workflow ref belong to the same release, and the pipeline needs the harness at its version or later, so both update in one PR.",
+      "matchPackageNames": ["@ai-ecoverse/slicc-shared-web", "ai-ecoverse/slicc-shared-web"],
+      "groupName": "slicc-shared-web"
+    },
+    {
       "description": "fnox-build publishes @ai-ecoverse/fnox and its platform packages only as <upstream fnox version>-slicc.<build> prereleases, with latest pointing at the newest; take only the -slicc.N ones.",
       "matchPackageNames": ["@ai-ecoverse/fnox", "@ai-ecoverse/fnox-*"],
       "allowedVersions": "/-slicc\\.\\d+$/"
