@@ -35,3 +35,10 @@ test('the rule disables only majors and is not an allowedVersions cap', () => {
   assert.deepEqual(rule.matchUpdateTypes, ['major']);
   assert.equal(rule.allowedVersions, undefined);
 });
+
+test('the slicc-shared-web package and workflow ref update together in one PR', () => {
+  const rule = preset.packageRules.find(
+    (r) => r.groupName && names.every((n) => r.matchPackageNames?.includes(n))
+  );
+  assert.equal(rule?.groupName, 'slicc-shared-web');
+});
