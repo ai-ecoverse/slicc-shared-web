@@ -927,14 +927,14 @@ jobs:
           REAL_GIT="$(command -v git)" PATH="$shim:$PATH" npx semantic-release
 
       - id: released
-        if: inputs.attest != ''
+        if: ${{ !cancelled() && inputs.attest != '' }}
         run: |
           git fetch --tags --force --quiet origin
           tag=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -1)
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           [ -n "$tag" ] || echo "no release on $GITHUB_SHA, so nothing to attest"
 
-      - if: inputs.attest != '' && steps.released.outputs.tag != ''
+      - if: ${{ !cancelled() && inputs.attest != '' && steps.released.outputs.tag != '' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: ${{ inputs.attest }}
