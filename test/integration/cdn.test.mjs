@@ -122,3 +122,45 @@ console.log(JSON.stringify(bodies));`,
     'left-pad-1.3.0.tgz',
   ]);
 });
+
+const intercept = `
+const { cdn } = await import(process.env.HARNESS);
+globalThis.fetch = async () =>
+  process.env.STATUS === 'down' ? Promise.reject(new Error('offline')) : new Response('', { status: Number(process.env.STATUS) });
+const sent = [];
+let handler;
+const cdp = { on: (fn) => { handler = fn; }, send: async (method, params) => { sent.push({ method, ...params }); } };
+await cdn(cdp, ['https://registry.npmjs.org/']);
+await handler({ method: 'Fetch.requestPaused', params: { requestId: 'r1', request: { url: process.env.URL } } });
+console.log(JSON.stringify(sent.filter(({ method }) => method !== 'Fetch.enable')));
+`;
+
+async function intercepted(status, url) {
+  const cwd = await mkdtemp(join(tmpdir(), 'slicc-cdn-'));
+  dirs.push(cwd);
+  const { stdout } = await run(process.execPath, ['--input-type=module', '-e', intercept], {
+    cwd,
+    env: { ...process.env, HARNESS: harness, STATUS: status, URL: url },
+  });
+  return JSON.parse(stdout);
+}
+
+const attestation =
+  'https://registry.npmjs.org/-/npm/v1/attestations/@ai-ecoverse%2fwasix-ruby@3.4.11-24';
+
+test('a 4xx from npm reaches the page as that status, as npm answers it, not as a network failure', async () => {
+  const cors = [{ name: 'access-control-allow-origin', value: '*' }];
+  assert.deepEqual(await intercepted('404', attestation), [
+    { method: 'Fetch.fulfillRequest', requestId: 'r1', responseCode: 404, responseHeaders: cors },
+  ]);
+  assert.deepEqual(await intercepted('403', tarball), [
+    { method: 'Fetch.fulfillRequest', requestId: 'r1', responseCode: 403, responseHeaders: cors },
+  ]);
+});
+
+test('npm unreachable or a 5xx with nothing cached still fails the request', async () => {
+  for (const status of ['down', '503'])
+    assert.deepEqual(await intercepted(status, attestation), [
+      { method: 'Fetch.failRequest', requestId: 'r1', errorReason: 'Failed' },
+    ]);
+});
