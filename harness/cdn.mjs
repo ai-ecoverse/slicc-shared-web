@@ -96,9 +96,15 @@ export async function cdn(cdp, remotes) {
       const failure = { requestId, responseCode: state.status, responseHeaders: cors };
       return cdp.send('Fetch.fulfillRequest', failure);
     }
+    let refused = 0;
     const body = await download(request.url).catch((error) => {
+      refused = Number(/^(4\d\d) /.exec(error.message)?.[1] ?? 0);
       console.warn(`harness: could not serve ${request.url}: ${error.message}`);
     });
+    if (refused) {
+      const answer = { requestId, responseCode: refused, responseHeaders: cors };
+      return cdp.send('Fetch.fulfillRequest', answer);
+    }
     if (!body) return cdp.send('Fetch.failRequest', { requestId, errorReason: 'Failed' });
     const sent = Buffer.from(body);
     if (state.corrupt) sent[sent.length - 1] ^= 0xff;
