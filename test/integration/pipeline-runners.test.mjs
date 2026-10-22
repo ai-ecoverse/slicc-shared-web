@@ -268,7 +268,7 @@ test('release gets only the secrets release-secrets names, and attests the attes
   assert.match(release, /if \(!own\.has\(key\) && only\.has\(key\)\)/);
   assert.match(
     release,
-    /if: inputs\.attest != '' && steps\.released\.outputs\.tag != ''\n {8}uses: actions\/attest-build-provenance@\w+\n {8}with:\n {10}subject-path: \$\{\{ inputs\.attest \}\}/
+    /if: \$\{\{ !cancelled\(\) && inputs\.attest != '' && steps\.released\.outputs\.tag != '' \}\}\n {8}uses: actions\/attest-build-provenance@\w+\n {8}with:\n {10}subject-path: \$\{\{ inputs\.attest \}\}/
   );
 });
 
@@ -277,4 +277,9 @@ test("the README's caller grants every permission the pipeline's jobs ask for", 
   const granted = /\npermissions:\n((?: {2}[a-z-]+: \w+\n)+)/.exec(readme)[1];
   const asked = new Set([...text.matchAll(/^ {6}([a-z-]+): write$/gm)].map((m) => m[1]));
   for (const name of asked) assert.match(granted, new RegExp(`^ {2}${name}: write$`, 'm'), name);
+});
+
+test('a release that tagged but failed to publish still gets its attestation', () => {
+  const release = jobs().release.join('\n');
+  assert.match(release, /id: released\n {8}if: \$\{\{ !cancelled\(\) && inputs\.attest != '' \}\}/);
 });
