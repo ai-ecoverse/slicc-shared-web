@@ -66,7 +66,7 @@ export function commandLine(
   ]);
   const base = flags.filter((flag) => !dropped.has(flag));
   const load = loaded ? ['--enable-unsafe-extension-debugging'] : [];
-  const mode = headless && !realistic ? ['--headless=new'] : [];
+  const mode = headless && !realistic ? ['--headless=new'] : ['--enable-unsafe-swiftshader'];
   return [...mode, ...base, ...load, ...extra, `--user-data-dir=${profile}`, 'about:blank'];
 }
 
