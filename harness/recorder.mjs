@@ -10,7 +10,7 @@ import { bounded, ignore, raw, samples, sleep, TIMED_OUT } from './util.mjs';
 const Util = mcrUtil.Util ?? mcrUtil.default;
 
 const profiled = new Set(['page', 'worker', 'service_worker', 'shared_worker']);
-const unheld = ['service_worker', 'shared_worker'];
+const unheld = ['service_worker'];
 const sampling = [['Profiler.setSamplingInterval', { interval: 100 }], ['Profiler.start']];
 const unloading = 'sliccHarnessUnload';
 const unload = `addEventListener('beforeunload', function ${unloading}() { debugger; })`;
