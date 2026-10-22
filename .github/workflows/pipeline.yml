@@ -817,8 +817,15 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         continue-on-error: true
         with:
-          pattern: findings-*
-          path: findings
+          name: findings-claude
+          path: findings/findings-claude
+
+      - if: needs.lint.outputs.review == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        continue-on-error: true
+        with:
+          name: findings-codex
+          path: findings/findings-codex
 
       - env:
           EVENT: ${{ github.event_name }}
