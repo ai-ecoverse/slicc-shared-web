@@ -81,6 +81,33 @@ test('lists the files it hands to node --test next to the JUnit report', async (
   assert.equal(await readFile(join(dir, lists[0]), 'utf8'), 'b.test.mjs\nd.test.mjs\n');
 });
 
+test('times each test file it hands over by its own wall time, helper-registered tests included', async () => {
+  const dir = await fixture();
+  await mkdir(join(dir, 'lib'));
+  await writeFile(
+    join(dir, 'lib', 'slow.mjs'),
+    "import { test } from 'node:test';\nexport const slow = () => test('slow', () => new Promise((r) => setTimeout(r, 400)));\n"
+  );
+  await writeFile(join(dir, 'd.test.mjs'), "import { slow } from './lib/slow.mjs';\nslow();\n");
+  await run(process.execPath, ['--test', '*.test.mjs'], {
+    cwd: dir,
+    env: {
+      ...shardEnv(dir, ['b.test.mjs', 'd.test.mjs']),
+      SLICC_TEST_JUNIT: join(dir, 'junit.xml'),
+    },
+  });
+  const times = (await readdir(dir)).filter((name) => name.endsWith('.times'));
+  assert.equal(times.length, 1, times.join());
+  const rows = (await readFile(join(dir, times[0]), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  const ms = Object.fromEntries(rows.map(({ file, ms }) => [file, ms]));
+  assert.deepEqual(Object.keys(ms).sort(), ['b.test.mjs', 'd.test.mjs']);
+  assert.ok(ms['d.test.mjs'] >= 400, JSON.stringify(ms));
+  assert.ok(ms['d.test.mjs'] > ms['b.test.mjs'], JSON.stringify(ms));
+});
+
 test('leaves a nested node --test alone', async () => {
   const dir = await fixture();
   const { stdout } = await run(process.execPath, ['--test', '*.test.mjs'], {

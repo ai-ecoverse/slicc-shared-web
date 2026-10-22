@@ -164,6 +164,14 @@ jobs:
               if (file) seconds.set(file, (seconds.get(file) ?? 0) + Number(/\btime="([^"]*)"/.exec(attrs)?.[1] ?? 0));
             }
           }
+          const walls = new Map();
+          for (const report of globSync(`${RUNNER_TEMP}/junit-download/**/*.times`)) {
+            for (const line of readFileSync(report, 'utf8').split('\n').filter(Boolean)) {
+              const { file, ms } = JSON.parse(line);
+              if (files.includes(file)) walls.set(file, (walls.get(file) ?? 0) + ms / 1000);
+            }
+          }
+          for (const [file, wall] of walls) seconds.set(file, wall);
           const known = [...seconds.values()];
           const guess = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 1;
           const weight = (file) => seconds.get(file) ?? guess;
@@ -174,7 +182,7 @@ jobs:
             lightest.files.push(file);
           }
           shards.forEach((shard, i) => console.error(`shard ${i}: ${shard.files.length} files, ~${Math.round(shard.load)} s`));
-          console.error(`timings for ${seconds.size} of ${files.length} files`);
+          console.error(`timings for ${seconds.size} of ${files.length} files, ${walls.size} by wall time`);
           console.log(`split=${JSON.stringify(shards.map((shard) => shard.files.join('\n')))}`);
           console.log(`files=${JSON.stringify(files)}`);
           EOF
