@@ -34,7 +34,9 @@ export function unquote(text) {
   const bytes = [];
   for (let at = 1; at < text.length - 1; at++) {
     if (text[at] !== '\\') {
-      bytes.push(text.charCodeAt(at));
+      const char = String.fromCodePoint(text.codePointAt(at));
+      bytes.push(...Buffer.from(char));
+      at += char.length - 1;
       continue;
     }
     const next = text[++at];
