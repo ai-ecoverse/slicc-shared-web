@@ -56,6 +56,10 @@ const state = {
   pulls: {},
   workflowRuns: [],
   jobs: {},
+  earlier: [],
+  threads: [],
+  resolved: [],
+  dismissals: [],
   nextId: 1,
 };
 let server;
@@ -74,14 +78,29 @@ function handle(req, res, body) {
     state.flaky[p]--;
     return reply(res, 502, { message: 'bad gateway' });
   }
+  if (p === '/graphql' && body?.query?.startsWith('mutation')) {
+    if (state.resolveDenied)
+      return reply(res, 200, { errors: [{ message: 'Resource not accessible by integration' }] });
+    state.resolved.push(body.variables.t);
+    return reply(res, 200, { data: { resolveReviewThread: { thread: { id: body.variables.t } } } });
+  }
   if (p === '/graphql')
     return reply(res, 200, {
       data: {
         repository: {
-          pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } },
+          pullRequest: {
+            reviewThreads: { pageInfo: { hasNextPage: false }, nodes: state.threads },
+          },
         },
       },
     });
+  if (
+    (m = /^\/repos\/o\/r\/pulls\/(\d+)\/reviews\/(\d+)\/dismissals$/.exec(p)) &&
+    req.method === 'PUT'
+  ) {
+    state.dismissals.push({ id: Number(m[2]), ...body });
+    return reply(res, 200, {});
+  }
   if ((m = /^\/repos\/o\/r\/commits\/([0-9a-f]{40})\/check-runs$/.exec(p)))
     return reply(res, 200, {
       check_runs: state.checks.filter(
@@ -146,7 +165,10 @@ function handle(req, res, body) {
   }
   if ((m = /^\/repos\/o\/r\/pulls\/(\d+)$/.exec(p))) return reply(res, 200, state.pulls[m[1]]);
   if ((m = /^\/repos\/o\/r\/pulls\/(\d+)\/reviews$/.exec(p))) {
-    if (req.method === 'GET') return reply(res, 200, []);
+    if (req.method === 'GET')
+      return state.earlier === 'denied'
+        ? reply(res, 403, { message: 'Resource not accessible by integration' })
+        : reply(res, 200, state.earlier);
     state.reviews.push({ pr: Number(m[1]), ...body });
     return reply(res, 200, { id: state.nextId++ });
   }
@@ -351,6 +373,11 @@ function reset() {
   state.workflowRuns = [];
   state.jobs = {};
   state.issues = [];
+  state.earlier = [];
+  state.threads = [];
+  state.resolved = [];
+  state.dismissals = [];
+  state.resolveDenied = false;
 }
 
 async function plan(name, head, extra, guard = 'PASS', rec = receipt(head)) {
@@ -523,6 +550,80 @@ test('a pass verdict passes the check, with no review unless it has comments', a
   );
   assert.equal(noted.check.conclusion, 'success');
   assert.equal(noted.review.event, 'COMMENT');
+});
+
+function earlierFailure() {
+  const bot = (id, extra) => ({
+    id,
+    state: 'CHANGES_REQUESTED',
+    user: { login: 'github-actions[bot]' },
+    body: `**cert-review: fail: 1 finding**\n<!-- cert-review v2 -->`,
+    ...extra,
+  });
+  state.earlier = [
+    bot(501),
+    bot(502, { state: 'COMMENTED' }),
+    bot(503, { user: { login: 'someone' } }),
+    bot(504, { body: 'no marker' }),
+  ];
+  state.threads = [
+    {
+      id: 'T1',
+      isResolved: false,
+      comments: { nodes: [{ author: { login: 'github-actions' }, body: threadBody }] },
+    },
+  ];
+  state.resolveDenied = true;
+}
+const threadBody = '**fail** the guard is off\n\n<!-- cert-review v2 -->';
+
+test('a pass on a later head dismisses the earlier REQUEST_CHANGES even when resolving its threads is refused', async () => {
+  const { r, check } = await post(
+    v2({ verdict: 'pass', summary: 'fine', comments: [{ ...blocker, severity: 'note' }] }),
+    earlierFailure
+  );
+  assert.equal(r.code, 0, r.stdout);
+  assert.equal(check.conclusion, 'success');
+  assert.deepEqual(
+    state.dismissals.map((d) => [d.id, d.event]),
+    [[501, 'DISMISS']]
+  );
+  assert.match(
+    state.dismissals[0].message,
+    new RegExp(`superseded by cert-review on ${shas.code.slice(0, 7)}`)
+  );
+  assert.deepEqual(state.resolved, []);
+  assert.match(
+    r.stdout,
+    /resolving earlier threads failed: GraphQL: Resource not accessible by integration/
+  );
+  assert.equal(state.reviews.at(-1).event, 'COMMENT');
+});
+
+test('a quiet pass dismisses the earlier REQUEST_CHANGES and resolves its threads when allowed', async () => {
+  const { r } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), () => {
+    earlierFailure();
+    state.resolveDenied = false;
+  });
+  assert.equal(r.code, 0, r.stdout);
+  assert.deepEqual(
+    state.dismissals.map((d) => d.id),
+    [501]
+  );
+  assert.deepEqual(state.resolved, ['T1']);
+  assert.equal(state.reviews.length, 0);
+});
+
+test('a refused dismissal still resolves the threads and still certifies a pass', async () => {
+  const { r, check } = await post(v2({ verdict: 'pass', summary: 'fine', comments: [] }), () => {
+    earlierFailure();
+    state.resolveDenied = false;
+    state.earlier = 'denied';
+  });
+  assert.equal(r.code, 0, r.stdout);
+  assert.equal(check.conclusion, 'success');
+  assert.match(r.stdout, /dismissing earlier reviews failed/);
+  assert.deepEqual(state.resolved, ['T1']);
 });
 
 for (const [name, verdict] of [
