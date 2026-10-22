@@ -515,7 +515,11 @@ jobs:
       - run: |
           npm ci
           mv base "$RUNNER_TEMP/base"
-          (cd "$RUNNER_TEMP/base" && npm ci)
+          if [ -f "$RUNNER_TEMP/base/package-lock.json" ]; then
+            (cd "$RUNNER_TEMP/base" && npm ci)
+          else
+            echo "the base has no package-lock.json, so its tree stays uninstalled"
+          fi
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -571,8 +575,12 @@ jobs:
               for _ in $(seq 50); do curl -fs "http://127.0.0.1:$port/json/version" > /dev/null && break; sleep 0.2; done
               tree=$GITHUB_WORKSPACE
               [ "$side" = head ] || tree=$RUNNER_TEMP/base
-              (cd "$tree" && SLICC_REVIEW_SIDE=$side SLICC_REVIEW_LINK=$link \
-                SLICC_REVIEW_CDP="http://127.0.0.1:$port" bash -eo pipefail -c "$REVIEW_BROWSER")
+              if [ -f "$tree/package-lock.json" ]; then
+                (cd "$tree" && SLICC_REVIEW_SIDE=$side SLICC_REVIEW_LINK=$link \
+                  SLICC_REVIEW_CDP="http://127.0.0.1:$port" bash -eo pipefail -c "$REVIEW_BROWSER")
+              else
+                echo "the $side has no package-lock.json, so its $link browser stays bare"
+              fi
               list="$list{\"side\":\"$side\",\"link\":\"$link\",\"cdp\":\"http://127.0.0.1:$port\",\"tree\":\"$tree\"},"
               port=$((port + 1))
             done
@@ -595,7 +603,7 @@ jobs:
 
           The working directory holds:
           - .: the pull request's head, dependencies installed, with full history, so git diff BASE...HEAD and git log work (BASE is the base commit: git merge-base HEAD origin/BASE_REF, or the diff in $RUNNER_TEMP/review/context/pr.diff). Your scratch files go in $RUNNER_TEMP/review, never in the checkout.
-          - $RUNNER_TEMP/base: its base, dependencies installed, to compare with.
+          - $RUNNER_TEMP/base: its base, to compare with, dependencies installed if it has a package-lock.json; without one its browsers are bare Chrome.
           - $RUNNER_TEMP/review/context/: the pull request (pr.json, pr.diff, files.txt, commits.txt, comments.json, reviews.json, review-comments.json), the repository's issues (issues.json) and recent pull requests (pulls.json). missing.txt names any the GitHub API wouldn't give; read those with gh if you need them.
           - $RUNNER_TEMP/review/integration/: the integration tests' coverage, artifacts (screenshots, CPU profiles, crash dumps, console logs) and JUnit reports, one directory per shard.
           - $RUNNER_TEMP/review/browsers.json: four running headed Chrome instances on the virtual display $DISPLAY, reachable over CDP, one per side (head, base) and link (extension, slicc-cli). The repository's review-browser hook, if it has one, loaded each side's build into them; without one they are bare Chrome. Each also runs slicc-shared-web's harness extension, a content script on every page and frame that sets data-slicc-harness-extension, standing in for the password managers and similar extensions real users have; it is expected, not a finding. Use them to compare the head's behaviour with the base's.

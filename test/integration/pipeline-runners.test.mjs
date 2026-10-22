@@ -283,3 +283,87 @@ test('a release that tagged but failed to publish still gets its attestation', (
   const release = jobs().release.join('\n');
   assert.match(release, /id: released\n {8}if: \$\{\{ !cancelled\(\) && inputs\.attest != '' \}\}/);
 });
+
+function stepScript(job, marker) {
+  const step = steps(jobs()[job]).find((s) => s.some((l) => l.includes(marker)));
+  return step
+    .slice(step.findIndex((l) => /^ {6}(- | {2})run: \|$/.test(l)) + 1)
+    .map((l) => l.slice(10))
+    .join('\n');
+}
+
+function reviewBase(base) {
+  const dir = mkdtempSync(`${tmpdir()}/review-base-`);
+  try {
+    const workspace = `${dir}/workspace`;
+    const temp = `${dir}/temp`;
+    const bin = `${dir}/bin`;
+    const script = {
+      'review:browser': 'echo "$SLICC_REVIEW_SIDE $SLICC_REVIEW_LINK" >> "$RUNNER_TEMP/hooked"',
+    };
+    const pkg = JSON.stringify({ name: 'fixture', version: '1.0.0', scripts: script });
+    const lock = JSON.stringify({
+      name: 'fixture',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: { '': { name: 'fixture', version: '1.0.0' } },
+    });
+    mkdirSync(`${workspace}/base`, { recursive: true });
+    mkdirSync(`${workspace}/harness/extension`, { recursive: true });
+    mkdirSync(`${temp}/review`, { recursive: true });
+    mkdirSync(bin);
+    writeFileSync(`${workspace}/package.json`, pkg);
+    writeFileSync(`${workspace}/package-lock.json`, lock);
+    writeFileSync(`${workspace}/harness/extension/manifest.json`, '{}');
+    if (base.pkg) writeFileSync(`${workspace}/base/package.json`, pkg);
+    if (base.lock) writeFileSync(`${workspace}/base/package-lock.json`, lock);
+    writeFileSync(`${bin}/chrome`, '#!/bin/sh\n', { mode: 0o755 });
+    writeFileSync(`${bin}/curl`, '#!/bin/sh\n', { mode: 0o755 });
+    writeFileSync(
+      `${bin}/npx`,
+      `#!/bin/sh\ncase " $* " in *" find-browser "*) echo "${bin}/chrome" ;; esac\n`,
+      { mode: 0o755 }
+    );
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      DISPLAY: ':0',
+      GITHUB_WORKSPACE: workspace,
+      GITHUB_ENV: `${temp}/env`,
+      RUNNER_TEMP: temp,
+      REVIEW_BROWSER: /review-browser:\n {8}type: string\n {8}default: (.+)/.exec(text)[1],
+      npm_config_audit: 'false',
+      npm_config_fund: 'false',
+      npm_config_offline: 'true',
+    };
+    for (const marker of ['mv base "$RUNNER_TEMP/base"', 'name: Four browsers']) {
+      const run = spawnSync('bash', ['-eo', 'pipefail', '-c', stepScript('reviewer', marker)], {
+        cwd: workspace,
+        encoding: 'utf8',
+        env,
+      });
+      assert.equal(run.status, 0, `${marker}\n${run.stdout}\n${run.stderr}`);
+    }
+    const read = (path) => readFileSync(`${temp}/${path}`, 'utf8');
+    return { hooked: read('hooked'), browsers: JSON.parse(read('review/browsers.json')) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('a base without a lockfile, or without a package.json, still gets both reviewers their four browsers', () => {
+  const cases = [
+    [{}, 'head extension\nhead cli\n'],
+    [{ pkg: true }, 'head extension\nhead cli\n'],
+    [{ pkg: true, lock: true }, 'head extension\nhead cli\nbase extension\nbase cli\n'],
+  ];
+  for (const [base, hooked] of cases) {
+    const review = reviewBase(base);
+    assert.equal(review.hooked, hooked, JSON.stringify(base));
+    assert.deepEqual(
+      review.browsers.map((b) => `${b.side} ${b.link}`),
+      ['head extension', 'head cli', 'base extension', 'base cli']
+    );
+  }
+});
