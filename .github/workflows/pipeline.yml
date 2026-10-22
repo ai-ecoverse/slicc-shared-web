@@ -505,7 +505,11 @@ jobs:
       - run: |
           npm ci
           mv base "$RUNNER_TEMP/base"
-          (cd "$RUNNER_TEMP/base" && npm ci)
+          if [ -f "$RUNNER_TEMP/base/package-lock.json" ]; then
+            (cd "$RUNNER_TEMP/base" && npm ci)
+          else
+            echo "the base has no package-lock.json, so its tree stays uninstalled"
+          fi
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:

@@ -283,3 +283,11 @@ test('a release that tagged but failed to publish still gets its attestation', (
   const release = jobs().release.join('\n');
   assert.match(release, /id: released\n {8}if: \$\{\{ !cancelled\(\) && inputs\.attest != '' \}\}/);
 });
+
+test('a base without a lockfile, as when a repo first gets a package.json, still gets reviewed', () => {
+  const reviewer = jobs().reviewer.join('\n');
+  assert.match(
+    reviewer,
+    /if \[ -f "\$RUNNER_TEMP\/base\/package-lock\.json" \]; then\n\s+\(cd "\$RUNNER_TEMP\/base" && npm ci\)/
+  );
+});
