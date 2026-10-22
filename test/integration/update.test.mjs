@@ -8,6 +8,7 @@ const chrome = await launch({ roots, coverage: [], profile: false });
 after(() => chrome.close());
 
 const BUSY = 8000;
+const workers = new Set(['service_worker', 'shared_worker', 'worker']);
 const worker = await readFile(new URL('update/sw.js', import.meta.url), 'utf8');
 
 function busy(ms) {
@@ -20,8 +21,8 @@ function blockOnNextWorker() {
   const attached = [];
   const stop = chrome.cdp.on(({ method, params, sessionId }) => {
     const type = params?.targetInfo?.type;
-    if (method === 'Target.attachedToTarget' && !sessionId && type === 'service_worker')
-      attached.push(params.waitingForDebugger);
+    if (method === 'Target.attachedToTarget' && workers.has(type))
+      attached.push(`${sessionId ? 'nested' : 'root'} ${type} held ${params.waitingForDebugger}`);
     if (method !== 'Target.targetCreated' || type !== 'service_worker' || blocked) return;
     blocked = Date.now();
     busy(BUSY);
@@ -29,7 +30,7 @@ function blockOnNextWorker() {
   return { stop, attached, at: () => blocked };
 }
 
-test('with nothing collected, an updated service worker activates and answers the next navigation while the harness is too busy to answer the browser', async (t) => {
+test('with nothing collected, an updated service worker activates and answers the next navigation while the harness is too busy to answer the browser, and no worker that appears meanwhile is held at its start', async (t) => {
   const page = await chrome.page(t);
   await page.goto('/');
   await page.evaluate(async () => {
@@ -58,6 +59,14 @@ test('with nothing collected, an updated service worker activates and answers th
     `the navigation got its answer ${answered - blocked} ms after the harness went busy for ${BUSY} ms`
   );
   await page.until(() => !!navigator.serviceWorker.controller);
-  assert.deepEqual(block.attached, [false]);
+  await page.until(() => window.started?.length === 2);
+  assert.ok(block.attached.includes('root service_worker held false'), block.attached.join('\n'));
+  assert.ok(block.attached.includes('root shared_worker held false'), block.attached.join('\n'));
+  assert.ok(block.attached.includes('nested worker held false'), block.attached.join('\n'));
+  assert.deepEqual(
+    block.attached.filter((line) => line.endsWith('held true')),
+    [],
+    'a worker that appeared mid-update was held at its start'
+  );
   assert.deepEqual(page.errors, []);
 });
