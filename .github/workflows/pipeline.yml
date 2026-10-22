@@ -611,6 +611,9 @@ jobs:
           ${ARTIFACTS:+- $RUNNER_TEMP/review/artifacts/: the artifacts this run built before the pipeline (those matching $ARTIFACTS), one directory per artifact. The review-browser hook got the same path as SLICC_ARTIFACTS.}
 
           Read the change, run what you need, and decide whether it should be merged.
+          Deny only for a problem you confirmed that users or operators are likely to hit: a security or secret exposure, data loss or corruption, a crash, a regression in a common path, or a behaviour change without a test.
+          A race or edge case that needs unlikely timing (a window of seconds, a person acting in the middle of a run) or a rare combination of events doesn't block: approve, describe the scenario in a comment, and add an issue if it's worth tracking.
+          Don't deny for a risk the base already has. On a pull request that has been reviewed before (reviews.json, comments.json), deny only for something new and at least as serious as what earlier rounds fixed; don't move from one narrow case to the next.
           Answer with JSON that matches the schema you were given:
           - verdict: "approved" or "denied".
           - summary: a few sentences on the change and your verdict.

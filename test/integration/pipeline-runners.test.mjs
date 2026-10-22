@@ -367,3 +367,13 @@ test('a base without a lockfile, or without a package.json, still gets both revi
     );
   }
 });
+
+test('reviewers deny only for likely, confirmed problems and comment on narrow races', () => {
+  const reviewer = jobs().reviewer.join('\n');
+  assert.match(
+    reviewer,
+    /Deny only for a problem you confirmed that users or operators are likely to hit/
+  );
+  assert.match(reviewer, /doesn't block: approve, describe the scenario in a comment/);
+  assert.match(reviewer, /don't move from one narrow case to the next/);
+});
