@@ -3,7 +3,8 @@
   "description": [
     "Root Renovate preset for SLICC's web repos. Extend it with github>ai-ecoverse/slicc-shared-web and keep repo-specific rules in the repo's own renovate.json.",
     "Every dependency updates in its own PR so a breaking bump fails in isolation; only purposeful cohesion groups exist, never a catch-all group.",
-    "Automerge is on: a PR merges by itself once CI is green and the release is old enough."
+    "Automerge is on: a PR merges by itself once CI is green and the release is old enough.",
+    "Go modules: run go mod tidy after every update, so a bump that changes indirect requirements or leaves the old version's go.sum lines passes go mod tidy -diff in CI, and rewrite import paths on major updates. This is set for every update, not in a gomod packageRule, because Renovate runs a branch's go.mod artifacts with the postUpdateOptions of the branch's first upgrade by dependency name, which in a group that also moves the npm package, such as @ai-ecoverse/slicc-browsers with github.com/ai-ecoverse/slicc-browsers, is the npm one."
   ],
   "extends": ["config:recommended"],
   "semanticCommits": "enabled",
@@ -14,6 +15,7 @@
   "minimumReleaseAge": "7 days",
   "prHourlyLimit": 4,
   "internalChecksFilter": "strict",
+  "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
   "vulnerabilityAlerts": {
     "enabled": true,
     "minimumReleaseAge": "0 days"
@@ -105,11 +107,6 @@
       "groupName": "coreutils and procps",
       "groupSlug": "coreutils-and-procps",
       "separateMajorMinor": false
-    },
-    {
-      "description": "Go modules: run go mod tidy after every update, so a bump that changes indirect requirements passes go mod tidy -diff in CI, and rewrite import paths on major updates.",
-      "matchManagers": ["gomod"],
-      "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"]
     },
     {
       "matchPackageNames": ["semantic-release", "@semantic-release/{/,}**"],

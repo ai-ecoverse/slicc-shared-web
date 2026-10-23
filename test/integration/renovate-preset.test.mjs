@@ -42,3 +42,36 @@ test('the slicc-shared-web package and workflow ref update together in one PR', 
   );
   assert.equal(rule?.groupName, 'slicc-shared-web');
 });
+
+function postUpdateOptions(upgrade) {
+  let result = preset.postUpdateOptions ?? [];
+  for (const rule of preset.packageRules) {
+    if (!('postUpdateOptions' in rule)) continue;
+    if (rule.matchManagers && !rule.matchManagers.includes(upgrade.manager)) continue;
+    if (rule.matchPackageNames && !rule.matchPackageNames.includes(upgrade.depName)) continue;
+    result = rule.postUpdateOptions;
+  }
+  return result;
+}
+
+function branchPostUpdateOptions(upgrades) {
+  const [first] = [...upgrades].sort((a, b) =>
+    a.depName < b.depName ? -1 : a.depName > b.depName ? 1 : 0
+  );
+  return postUpdateOptions(first);
+}
+
+test('a Go module update runs go mod tidy and rewrites import paths', () => {
+  const options = postUpdateOptions({ manager: 'gomod', depName: 'github.com/pion/webrtc/v4' });
+  assert.ok(options.includes('gomodTidy'));
+  assert.ok(options.includes('gomodUpdateImportPaths'));
+});
+
+test('a group that moves an npm package with its Go module still tidies go.sum', () => {
+  const options = branchPostUpdateOptions([
+    { manager: 'gomod', depName: 'github.com/ai-ecoverse/slicc-browsers' },
+    { manager: 'npm', depName: '@ai-ecoverse/slicc-browsers' },
+  ]);
+  assert.ok(options.includes('gomodTidy'));
+  assert.ok(options.includes('gomodUpdateImportPaths'));
+});
