@@ -377,3 +377,9 @@ test('reviewers deny only for likely, confirmed problems and comment on narrow r
   assert.match(reviewer, /doesn't block: approve, describe the scenario in a comment/);
   assert.match(reviewer, /don't move from one narrow case to the next/);
 });
+
+test('the split weighs each file by its own wall time when shard.cjs recorded one', () => {
+  const lint = jobs().lint.join('\n');
+  assert.match(lint, /junit-download\/\*\*\/\*\.times/);
+  assert.match(lint, /for \(const \[file, wall\] of walls\) seconds\.set\(file, wall\);/);
+});

@@ -80,7 +80,10 @@ if (list !== undefined && process.execArgv.includes('--test') && !env.NODE_TEST_
   keepReport();
   const chosen = select(process.argv.slice(1));
   record(chosen ?? expand(process.argv.slice(1)));
-  env.NODE_OPTIONS = env.SLICC_TEST_NODE_OPTIONS ?? '';
+  const junit = env.SLICC_TEST_JUNIT;
+  const timer = junit ? ` --require ${join(__dirname, 'file-time.cjs')}` : '';
+  env.NODE_OPTIONS = `${env.SLICC_TEST_NODE_OPTIONS ?? ''}${timer}`.trim();
+  if (junit) env.SLICC_TEST_TIMES = junit.replace(/(\.xml)?$/, `-${process.pid}.times`);
   for (const name of [
     'SLICC_TEST_NODE_OPTIONS',
     'SLICC_TEST_FILES',
