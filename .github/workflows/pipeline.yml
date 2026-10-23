@@ -24,6 +24,9 @@ on:
       test-glob:
         type: string
         default: test/integration/**/*.test.mjs
+      windows-test:
+        type: string
+        default: ''
       shards:
         type: number
         default: 4
@@ -340,8 +343,37 @@ jobs:
             junit/
           if-no-files-found: ignore
 
+  windows:
+    needs: lint
+    if: inputs.windows-test != '' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    runs-on: windows-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Windows tests
+        env:
+          WINDOWS_TEST: ${{ inputs.windows-test }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          Invoke-Expression $env:WINDOWS_TEST
+
   integration:
-    needs: [lint, test]
+    needs: [lint, test, windows]
     if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && !cancelled()
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
     steps:
@@ -357,12 +389,13 @@ jobs:
 
       - env:
           RESULT: ${{ needs.test.result }}
+          WINDOWS: ${{ inputs.windows-test != '' && needs.windows.result || 'off' }}
           REQUIRE: ${{ inputs.require-tests }}
           FILES: ${{ needs.lint.outputs.files }}
         run: |
           node --input-type=module <<'EOF'
           import { globSync, readFileSync } from 'node:fs';
-          const { RESULT, REQUIRE, FILES } = process.env;
+          const { RESULT, WINDOWS, REQUIRE, FILES } = process.env;
           const files = REQUIRE === 'true' ? JSON.parse(FILES || '[]') : [];
           const shards = new Map(files.map((file) => [file, new Set()]));
           const reports = globSync('junit/**/*.xml');
@@ -391,6 +424,7 @@ jobs:
           for (const file of twice) console.log(`::error title=Integration::${file} ran on ${[...shards.get(file)].join(', ')}`);
           const why =
             RESULT !== 'success' ? `the test job ended with ${RESULT}`
+            : WINDOWS !== 'off' && WINDOWS !== 'success' ? `the windows job ended with ${WINDOWS}`
             : failed > 0 ? `${failed} of ${tests} tests failed`
             : tests === 0 && REQUIRE === 'true' ? 'no test ran (a repo without node tests sets require-tests: false)'
             : files.length > 0 && lists.length === 0 ? 'no shard listed the files it ran (update the @ai-ecoverse/slicc-shared-web devDependency to the version of this workflow)'
@@ -398,7 +432,7 @@ jobs:
             : twice.length > 0 ? `${twice.length} test-glob files ran on more than one shard`
             : '';
           const once = files.length - missing.length - twice.length;
-          const ran = `${tests} tests${skipped ? ` (${skipped} skipped)` : ''} in ${reports.length} JUnit reports${files.length ? `, ${once} of ${files.length} test-glob files on exactly one shard` : ''}`;
+          const ran = `${tests} tests${skipped ? ` (${skipped} skipped)` : ''} in ${reports.length} JUnit reports${files.length ? `, ${once} of ${files.length} test-glob files on exactly one shard` : ''}${WINDOWS === 'success' ? ', windows passed' : ''}`;
           console.log(why ? `integration: FAIL ${why} (${ran})` : `integration: PASS ${ran}`);
           process.exit(why ? 1 : 0);
           EOF
