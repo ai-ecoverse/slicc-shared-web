@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { matchesGlob } from 'node:path';
 import { test } from 'node:test';
 
 const preset = JSON.parse(readFileSync(new URL('../../default.json', import.meta.url), 'utf8'));
@@ -74,4 +75,29 @@ test('a group that moves an npm package with its Go module still tidies go.sum',
   ]);
   assert.ok(options.includes('gomodTidy'));
   assert.ok(options.includes('gomodUpdateImportPaths'));
+});
+
+function minimumReleaseAge(depName, updateType) {
+  let result = preset.minimumReleaseAge;
+  for (const rule of preset.packageRules) {
+    if (!('minimumReleaseAge' in rule)) continue;
+    const patterns = rule.matchPackageNames ?? rule.matchDepNames;
+    if (patterns && !patterns.some((pattern) => matchesGlob(depName, pattern))) continue;
+    if (rule.matchUpdateTypes && !rule.matchUpdateTypes.includes(updateType)) continue;
+    result = rule.minimumReleaseAge;
+  }
+  return result;
+}
+
+function minutes(duration) {
+  const [, amount, unit] = /^(\d+) (minute|hour|day)s?$/.exec(duration);
+  return Number(amount) * { minute: 1, hour: 60, day: 1440 }[unit];
+}
+
+test('the slicc-shared-web package and workflow ref wait out a stale GitHub tag list, by the same age', () => {
+  for (const updateType of ['minor', 'patch']) {
+    const ages = names.map((name) => minimumReleaseAge(name, updateType));
+    assert.equal(ages[0], ages[1], updateType);
+    assert.ok(minutes(ages[0]) >= 60, `${updateType} ${ages[0]}`);
+  }
 });
