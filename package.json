@@ -13,7 +13,7 @@
   },
   "fledgling": {
     "provider": "github",
-    "workflow": "release.yml",
+    "workflow": "ci.yml",
     "repo": "ai-ecoverse/slicc-shared-web",
     "publish": true
   },

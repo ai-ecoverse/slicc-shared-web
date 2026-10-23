@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
-const workflows = ['release.yml', 'pipeline.yml', 'node-release.yml']
+const workflows = ['pipeline.yml']
   .map((name) => `.github/workflows/${name}`)
   .filter((path) => existsSync(`${root}/${path}`));
 
@@ -33,8 +33,8 @@ function render(group, ref) {
   });
 }
 
-test('release workflows are found', () => {
-  assert.ok(workflows.length >= 2, workflows.join(','));
+test('the pipeline is the release workflow', () => {
+  assert.deepEqual(workflows, ['.github/workflows/pipeline.yml']);
   for (const path of workflows) assert.ok(releaseConcurrency(path).length > 0, path);
 });
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -392,4 +392,12 @@ test('deploy runs pull request code, so it gets no secret unless deploy-secrets 
   );
   assert.match(deploy, /if \(!own\.has\(key\) && only\.has\(key\)\)/);
   assert.doesNotMatch(deploy, /only\.size === 0/);
+});
+
+test('this repo releases through its own pipeline: ci.yml runs it on pushes too, and there is no release.yml', () => {
+  const ci = readFileSync(`${root}/.github/workflows/ci.yml`, 'utf8');
+  assert.doesNotMatch(ci, /event_name != 'push'/);
+  assert.equal(existsSync(`${root}/.github/workflows/release.yml`), false);
+  const pkg = JSON.parse(readFileSync(`${root}/package.json`, 'utf8'));
+  assert.equal(pkg.fledgling.workflow, 'ci.yml');
 });
