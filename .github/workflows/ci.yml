@@ -27,6 +27,7 @@ jobs:
       attestations: write
     with:
       shards: 1
+      windows-test: ${{ contains(github.event.pull_request.labels.*.name, 'windows') && 'node -e "process.platform===''win32''||process.exit(1)"' || '' }}
       lint: |
         npm run lint
         # renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.+)$

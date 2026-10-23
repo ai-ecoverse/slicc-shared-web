@@ -30,11 +30,12 @@ function jobs() {
 const value = (lines, key) =>
   lines.map((line) => new RegExp(`^ {4}${key}:\\s*(.+?)\\s*$`).exec(line)?.[1]).find(Boolean);
 
-test('only release runs on ubuntu-latest; every other job runs on the pool, a fork on ubuntu-latest', () => {
+test('only release runs on ubuntu-latest and windows on windows-latest; every other job runs on the pool, a fork on ubuntu-latest', () => {
   const all = jobs();
   assert.ok(Object.keys(all).length >= 8, Object.keys(all).join());
+  const hosted = { release: 'ubuntu-latest', windows: 'windows-latest' };
   for (const [name, lines] of Object.entries(all)) {
-    assert.equal(value(lines, 'runs-on'), name === 'release' ? 'ubuntu-latest' : pool, name);
+    assert.equal(value(lines, 'runs-on'), hosted[name] ?? pool, name);
   }
   assert.match(text, /runs-on:\n {8}type: string\n {8}default: cloud-run-job/);
 });
@@ -144,7 +145,7 @@ test('lint plans the split once from the latest merge queue run, else the latest
 
 test('integration fails when a test-glob file ran on no shard or on two', () => {
   const integration = jobs().integration.join('\n');
-  assert.match(integration, /needs: \[lint, test\]/);
+  assert.match(integration, /needs: \[lint, test, windows\]/);
   assert.match(integration, /FILES: \$\{\{ needs\.lint\.outputs\.files \}\}/);
   assert.match(integration, /ran on no shard/);
   assert.match(integration, /ran on more than one shard/);
