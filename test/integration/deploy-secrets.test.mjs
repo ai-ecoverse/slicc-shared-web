@@ -37,13 +37,10 @@ function exported(deploySecrets) {
   return run.stdout;
 }
 
-test('the deploy step exports the caller secrets but none of the pipeline’s own', () => {
+test('without deploy-secrets the deploy step exports no secret, and the pipeline declares its own', () => {
   for (const name of ['AWS_BEARER_TOKEN_BEDROCK', 'SLICC_ISSUES_TOKEN'])
     assert.ok(declared.includes(name), name);
-  assert.equal(
-    exported(''),
-    'DEPLOY_TOKEN<<SLICC_EOF\ndeploy\nSLICC_EOF\nOTHER<<SLICC_EOF\nmulti\nline\nSLICC_EOF\nTHIRD<<SLICC_EOF\nthird\nSLICC_EOF\n'
-  );
+  assert.equal(exported(''), '');
 });
 
 test('with deploy-secrets, the deploy step exports only the listed caller secrets', () => {
