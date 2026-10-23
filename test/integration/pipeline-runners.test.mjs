@@ -383,3 +383,13 @@ test('the split weighs each file by its own wall time when shard.cjs recorded on
   assert.match(lint, /junit-download\/\*\*\/\*\.times/);
   assert.match(lint, /for \(const \[file, wall\] of walls\) seconds\.set\(file, wall\);/);
 });
+
+test('deploy runs pull request code, so it gets no secret unless deploy-secrets names it', () => {
+  const deploy = jobs().deploy.join('\n');
+  assert.match(
+    deploy,
+    /- name: Secrets as environment variables\n {8}if: inputs\.deploy-secrets != ''/
+  );
+  assert.match(deploy, /if \(!own\.has\(key\) && only\.has\(key\)\)/);
+  assert.doesNotMatch(deploy, /only\.size === 0/);
+});
