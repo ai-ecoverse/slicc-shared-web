@@ -45,3 +45,11 @@ test('each reviewer gets the caller artifacts before the review-browser hook run
   assert.match(reviewer, /ARTIFACTS: \$\{\{ inputs\.artifacts \}\}/);
   assert.match(reviewer, /\$\{ARTIFACTS:\+- \$RUNNER_TEMP\/review\/artifacts\/:/);
 });
+
+test('every upload replaces its earlier attempt, so a rerun leaves one artifact per name', () => {
+  const steps = text
+    .split(/\n(?= +- )/)
+    .filter((step) => /^ +- (?:[a-z-]+: .*\n +)*uses: actions\/upload-artifact@/.test(step));
+  assert.equal(steps.length, 4);
+  for (const step of steps) assert.match(step, /\n {10}overwrite: true\n/, step);
+});
