@@ -330,6 +330,7 @@ jobs:
         if: always()
         with:
           name: junit-${{ matrix.shard }}
+          overwrite: true
           path: junit/
           if-no-files-found: ignore
 
@@ -337,6 +338,7 @@ jobs:
         if: always()
         with:
           name: integration-${{ matrix.shard }}
+          overwrite: true
           path: |
             coverage/
             artifacts/
@@ -524,6 +526,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: context
+          overwrite: true
           path: ${{ runner.temp }}/context/
 
   reviewer:
@@ -728,6 +731,7 @@ jobs:
         if: always()
         with:
           name: findings-${{ matrix.agent }}
+          overwrite: true
           path: |
             ${{ runner.temp }}/review/findings.json
             ${{ runner.temp }}/review/shots/
