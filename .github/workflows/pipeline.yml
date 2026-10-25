@@ -273,7 +273,18 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: npm
 
+      - id: downloads
+        env:
+          LOCKS: ${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml') }}
+        run: echo "key=slicc-harness-cdn-$RUNNER_OS-$LOCKS" >> "$GITHUB_OUTPUT"
+
       - run: npm ci
+
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: node_modules/.cache/slicc-harness/cdn
+          key: ${{ steps.downloads.outputs.key }}
+          restore-keys: slicc-harness-cdn-${{ runner.os }}-
 
       - if: inputs.artifacts != ''
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -310,6 +321,7 @@ jobs:
           SLICC_TEST_ALL=$(node -e 'for (const file of require("node:fs").globSync(process.argv[1])) console.log(file)' "$GLOB")
           SLICC_TEST_SHARD=$SHARD
           SLICC_TEST_JUNIT=$PWD/junit/$SHARD.xml
+          SLICC_TEST_DOWNLOADS=$PWD/junit/$SHARD.downloads
           SLICC_TEST_NODE_OPTIONS="${NODE_OPTIONS:-} $EXTRA_NODE_OPTIONS"
           NODE_OPTIONS="$SLICC_TEST_NODE_OPTIONS --require $PWD/$shard --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=$PWD/junit/$SHARD.xml"
           if [ -z "${DISPLAY:-}" ]; then
@@ -323,7 +335,7 @@ jobs:
             for _ in $(seq 50); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.2; done
             export DISPLAY=:99
           fi
-          export SLICC_TEST_FILES SLICC_TEST_ALL SLICC_TEST_SHARD SLICC_TEST_JUNIT SLICC_TEST_NODE_OPTIONS NODE_OPTIONS
+          export SLICC_TEST_FILES SLICC_TEST_ALL SLICC_TEST_SHARD SLICC_TEST_JUNIT SLICC_TEST_DOWNLOADS SLICC_TEST_NODE_OPTIONS NODE_OPTIONS
           bash -eo pipefail -c "$TEST"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -1029,3 +1041,130 @@ jobs:
           fi
           export RELEASE_VERSION
           bash -eo pipefail -c "$AFTER_RELEASE"
+
+  downloads:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - id: key
+        env:
+          LOCKS: ${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml') }}
+        run: echo "key=slicc-harness-cdn-$RUNNER_OS-$LOCKS" >> "$GITHUB_OUTPUT"
+
+      - id: queued
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
+        continue-on-error: true
+        with:
+          name: ^junit-
+          name_is_regexp: true
+          event: merge_group
+          workflow_conclusion: success
+          if_no_artifact_found: ignore
+          path: ${{ runner.temp }}/junit-download
+
+      - if: steps.queued.outputs.found_artifact != 'true'
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
+        continue-on-error: true
+        with:
+          name: ^junit-
+          name_is_regexp: true
+          event: pull_request
+          workflow_conclusion: success
+          if_no_artifact_found: ignore
+          path: ${{ runner.temp }}/junit-download
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: node_modules/.cache/slicc-harness/cdn
+          key: ${{ steps.key.outputs.key }}
+          restore-keys: slicc-harness-cdn-${{ runner.os }}-
+
+      - id: fill
+        env:
+          KEY: ${{ steps.key.outputs.key }}
+          MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
+        run: |
+          node --input-type=module <<'EOF' | tee -a "$GITHUB_OUTPUT"
+          import { createHash } from 'node:crypto';
+          import { globSync, readFileSync } from 'node:fs';
+          import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+          import { dirname, join, relative } from 'node:path';
+          const { KEY, MATCHED, RUNNER_TEMP } = process.env;
+          const root = 'node_modules/.cache/slicc-harness/cdn';
+          const version = /^\/npm\/(@[^/@]+\/)?[^/@]+@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?\/./;
+          const place = (line) => {
+            const url = URL.parse(line);
+            if (!url || url.protocol !== 'https:' || url.search) return;
+            const { hostname, host, pathname } = url;
+            const fixed = hostname.startsWith('registry.') ? /\/-\/[^/]+\.tgz$/.test(pathname) : hostname === 'cdn.jsdelivr.net' && version.test(pathname);
+            const file = join(root, host, pathname);
+            if (fixed && !relative(root, file).startsWith('..')) return file;
+          };
+          const lists = globSync(`${RUNNER_TEMP}/junit-download/**/*.downloads`);
+          const urls = [...new Set(lists.flatMap((list) => readFileSync(list, 'utf8').split('\n')))].sort();
+          const wanted = new Map();
+          for (const url of urls) if (place(url)) wanted.set(place(url), url);
+          const fetchOne = async (url, file) => {
+            for (let attempt = 1; ; attempt++) {
+              try {
+                const response = await fetch(url, { signal: AbortSignal.timeout(60000) });
+                if (!response.ok) throw new Error(`${response.status}`);
+                await mkdir(dirname(file), { recursive: true });
+                await writeFile(`${file}.${process.pid}`, Buffer.from(await response.arrayBuffer()));
+                await rename(`${file}.${process.pid}`, file);
+                return true;
+              } catch (error) {
+                if (attempt >= 3 || /^4\d\d$/.test(error.message)) {
+                  console.error(`::warning title=Downloads::${url}: ${error.message}`);
+                  return false;
+                }
+              }
+            }
+          };
+          const queue = [];
+          for (const [file, url] of wanted) if (!(await stat(file).catch(() => null))?.isFile()) queue.push([file, url]);
+          let fetched = 0;
+          await Promise.all(Array.from({ length: 8 }, async () => {
+            for (let next = queue.shift(); next; next = queue.shift()) {
+              const [file, url] = next;
+              if (await fetchOne(url, file)) fetched++;
+              else wanted.delete(file);
+            }
+          }));
+          let pruned = 0;
+          let bytes = 0;
+          for (const entry of await readdir(root, { recursive: true, withFileTypes: true }).catch(() => [])) {
+            if (!entry.isFile()) continue;
+            const file = join(entry.parentPath, entry.name);
+            if (wanted.has(file)) bytes += (await stat(file)).size;
+            else {
+              await rm(file, { force: true });
+              pruned++;
+            }
+          }
+          const set = createHash('sha256').update([...wanted.values()].join('\n')).digest('hex').slice(0, 16);
+          const key = `${KEY}-${set}`;
+          const save = wanted.size > 0 && key !== MATCHED;
+          console.error(`downloads: ${wanted.size} files from ${lists.length} shard lists, ${fetched} fetched, ${pruned} pruned, ${Math.round(bytes / 1e6)} MB${save ? `, saving ${key}` : wanted.size ? `, ${MATCHED} is up to date` : ', nothing to cache'}`);
+          console.log(`key=${key}`);
+          console.log(`save=${save}`);
+          EOF
+
+      - if: steps.fill.outputs.save == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: node_modules/.cache/slicc-harness/cdn
+          key: ${{ steps.fill.outputs.key }}

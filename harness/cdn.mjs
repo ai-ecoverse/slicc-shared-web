@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type } from './server.mjs';
@@ -22,10 +22,26 @@ export async function fetched(url, { attempts = 3, ms = DOWNLOAD_TIMEOUT, fetche
 }
 
 const fresh = new Map();
+const served = new Set();
 
 export function mutable(url) {
   const { hostname, pathname } = new URL(url);
   return hostname.startsWith('registry.') && !/\/-\/[^/]+\.tgz$/.test(pathname);
+}
+
+export function immutable(url) {
+  const { hostname, pathname, search } = new URL(url);
+  if (search) return false;
+  if (hostname.startsWith('registry.')) return /\/-\/[^/]+\.tgz$/.test(pathname);
+  const version = /^\/npm\/(@[^/@]+\/)?[^/@]+@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?\/./;
+  return hostname === 'cdn.jsdelivr.net' && version.test(pathname);
+}
+
+async function list(url) {
+  const file = process.env.SLICC_TEST_DOWNLOADS;
+  if (!file || served.has(url) || !immutable(url)) return;
+  served.add(url);
+  await appendFile(file, `${url}\n`).catch(ignore);
 }
 
 async function unblock(dir) {
@@ -77,9 +93,9 @@ export async function download(url) {
     return fresh.get(url);
   }
   const file = new URL(path.replaceAll('%', '%25'), store);
-  const hit = await readFile(file).catch(ignore);
-  if (hit) return hit;
-  return save(file, await fetched(url));
+  const body = (await readFile(file).catch(ignore)) ?? (await save(file, await fetched(url)));
+  await list(url);
+  return body;
 }
 
 export async function cdn(cdp, remotes) {
