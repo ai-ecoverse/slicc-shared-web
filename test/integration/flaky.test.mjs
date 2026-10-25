@@ -236,16 +236,15 @@ async function integration(dir, { flaky = '', sha = 'cafe' } = {}) {
     FLAKY: flaky,
     STRICT: '**/*guard*.test.*',
     SHA: sha,
+    FILES: JSON.stringify(testFiles(dir)),
   };
   const verdict = await sh(step('integration', 'name: Flaky verdict'), work, env);
   assert.equal(verdict.status, 0, verdict.out);
-  const files = testFiles(dir);
   return sh(step('integration', 'RESULT'), work, {
     ...env,
     RESULT: 'success',
     WINDOWS: 'off',
     REQUIRE: 'true',
-    FILES: JSON.stringify(files),
     VERDICT: join(dir, 'tmp/slicc-flaky/verdict.json'),
   });
 }
@@ -269,6 +268,7 @@ async function report(dir, { flaky = '', event = 'pull_request', branch = 'featu
     QUIET: 'probe/**',
     CLOSE_AFTER: '20',
     PR: '9',
+    FILES: JSON.stringify(testFiles(dir)),
   });
   assert.equal(run.status, 0, run.out);
   return { log: run.out, summary: readFileSync(summary, 'utf8') };
@@ -440,4 +440,87 @@ test("when lint can't read the issues, every flip stays red", async () => {
   assert.equal(run.status, 1, run.out);
   assert.equal(record(dir).rows[0].kind, 'new');
   assert.equal((await integration(dir, { flaky, sha })).status, 1);
+});
+
+const GO = [
+  'if [ "${SLICC_TEST_RETRY:-}" = 1 ]; then outcome=""; else outcome=\'<failure message="flipped">flipped</failure>\'; fi',
+  'printf \'<?xml version="1.0" encoding="utf-8"?>\\n<testsuites><testcase name="TestGuardHolds" file="test/integration">%s</testcase></testsuites>\\n\' "$outcome" > "$SLICC_TEST_JUNIT"',
+  'printf \'test/integration/steady.test.mjs\\n\' > "${SLICC_TEST_JUNIT%.xml}-1.files"',
+  '[ "${SLICC_TEST_RETRY:-}" = 1 ]',
+].join('\n');
+const goKey = id('test/integration', 'TestGuardHolds');
+const goKnown = JSON.stringify({ known: { [goKey]: { issue: 4, commit: null } }, changed: [] });
+
+function forge(dir) {
+  writeFileSync(
+    join(dir, 'junit/0.retry.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n<testsuites><testcase name="TestGuardHolds" file="test/integration"/></testsuites>\n'
+  );
+  const row = {
+    file: 'test/integration',
+    name: 'TestGuardHolds',
+    key: goKey,
+    first: 'fail',
+    retry: 'pass',
+    error: 'flipped',
+    back: false,
+    excused: true,
+    kind: 'known',
+    issue: 4,
+  };
+  writeFileSync(
+    join(dir, 'junit/0.flaky.json'),
+    JSON.stringify({
+      ...record(dir),
+      skipped: null,
+      ok: true,
+      rerun: { files: ['test/integration'], ms: 1, exit: 0, timedOut: false },
+      rows: [row],
+    })
+  );
+  return row;
+}
+
+test('a failing test whose JUnit names a directory, not a test file, is not rerun and stays red', async () => {
+  const dir = fixture({ steady: 'steady' });
+  const run = await shard(dir, { flaky: goKnown, test: GO });
+  assert.equal(run.status, 1, run.out);
+  assert.match(
+    run.out,
+    /flaky: shard 0: not rerun: a failing test names no test file: test\/integration\n/
+  );
+  assert.doesNotMatch(run.out, /rerunning/);
+  assert.ok(!existsSync(join(dir, 'junit/0.retry.xml')));
+  assert.equal(record(dir).rerun, null);
+  assert.equal(record(dir).rows[0].kind, 'failure');
+});
+
+test("a forged flaky.json can't excuse a flip whose file isn't a test-glob file", async () => {
+  const dir = fixture({ steady: 'steady' });
+  await shard(dir, { flaky: goKnown, test: GO });
+  forge(dir);
+  const gate = await integration(dir, { flaky: goKnown });
+  assert.equal(gate.status, 1, gate.out);
+  assert.match(gate.out, /integration: FAIL 1 of 1 tests failed/);
+  assert.doesNotMatch(gate.out, /known flake/);
+});
+
+test('no issue is filed for a flip whose file is a directory', async () => {
+  const dir = fixture({ steady: 'steady' });
+  await shard(dir, { test: GO });
+  const row = forge(dir);
+  const flaky = JSON.stringify({ known: {}, changed: [] });
+  writeFileSync(
+    join(dir, 'junit/0.flaky.json'),
+    JSON.stringify({ ...record(dir), rows: [{ ...row, excused: false, kind: 'new' }] })
+  );
+  const state = github();
+  const { log } = await report(dir, { flaky });
+  assert.equal(posted(state, 'POST', '/repos/o/r/issues').length, 0, log);
+  assert.equal(
+    state.calls.filter((call) => call.method !== 'GET').length,
+    0,
+    JSON.stringify(state.calls)
+  );
+  assert.match(log, /flaky: test\/integration › TestGuardHolds: not filed: it names no test file/);
 });

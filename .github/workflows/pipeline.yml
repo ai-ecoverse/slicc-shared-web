@@ -545,6 +545,7 @@ jobs:
           FLAKY: ${{ needs.lint.outputs.flaky }}
           STRICT: ${{ inputs.strict-tests }}
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FILES: ${{ needs.lint.outputs.files }}
         run: node "$RUNNER_TEMP/slicc-flaky.mjs" verdict
 
       - env:
@@ -638,6 +639,7 @@ jobs:
           CLOSE_AFTER: ${{ inputs.flaky-close-after }}
           PR: ${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FILES: ${{ needs.lint.outputs.files }}
         run: node "$RUNNER_TEMP/slicc-flaky.mjs" report
 
   context:
