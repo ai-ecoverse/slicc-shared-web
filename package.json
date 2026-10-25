@@ -35,6 +35,7 @@
   "bin": {
     "slicc-agents-md": "bin/slicc-agents-md.sh",
     "slicc-diff-cover": "bin/slicc-diff-cover.sh",
+    "slicc-flaky": "bin/slicc-flaky.mjs",
     "slicc-install-hooks": "bin/slicc-install-hooks.mjs",
     "slicc-lint": "bin/slicc-lint.sh",
     "slicc-lint-comments": "bin/slicc-lint-comments.sh",

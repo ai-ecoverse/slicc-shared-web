@@ -27,6 +27,7 @@ jobs:
       attestations: write
     with:
       shards: 1
+      flaky-retry: 3
       windows-test: ${{ contains(github.event.pull_request.labels.*.name, 'windows') && 'node -e "process.platform===''win32''||process.exit(1)"' || '' }}
       lint: |
         npm run lint
