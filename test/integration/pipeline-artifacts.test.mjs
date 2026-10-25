@@ -50,6 +50,6 @@ test('every upload replaces its earlier attempt, so a rerun leaves one artifact 
   const steps = text
     .split(/\n(?= +- )/)
     .filter((step) => /^ +- (?:[a-z-]+: .*\n +)*uses: actions\/upload-artifact@/.test(step));
-  assert.equal(steps.length, 5);
+  assert.equal(steps.length, 6);
   for (const step of steps) assert.match(step, /\n {10}overwrite: true\n/, step);
 });

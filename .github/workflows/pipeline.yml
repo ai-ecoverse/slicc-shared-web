@@ -72,6 +72,20 @@ on:
       artifacts:
         type: string
         default: ''
+      flaky-retry:
+        type: number
+        default: 0
+      strict-tests:
+        type: string
+        default: |
+          **/*guard*.test.*
+          **/*security*.test.*
+      flaky-quiet-branches:
+        type: string
+        default: probe/**
+      flaky-close-after:
+        type: number
+        default: 20
     secrets:
       AWS_BEARER_TOKEN_BEDROCK:
         required: false
@@ -99,9 +113,11 @@ jobs:
       bedrock: ${{ steps.bedrock.outputs.bedrock }}
       split: ${{ steps.split.outputs.split }}
       files: ${{ steps.split.outputs.files }}
+      flaky: ${{ steps.flaky.outputs.flaky }}
     permissions:
       contents: read
       actions: read
+      issues: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -248,6 +264,49 @@ jobs:
           BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK != '' }}
         run: echo "bedrock=$BEDROCK" >> "$GITHUB_OUTPUT"
 
+      - id: flaky
+        if: inputs.flaky-retry > 0 && github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.merge_group.base_sha }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { spawnSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          const { GH_TOKEN, BASE, SHA, GITHUB_API_URL: api, GITHUB_REPOSITORY: repo, GITHUB_EVENT_NAME: event, GITHUB_SHA: tested, GITHUB_OUTPUT } = process.env;
+          const git = (...args) => {
+            const run = spawnSync('git', args, { encoding: 'utf8' });
+            if (run.status !== 0) throw new Error(`git ${args[0]}: ${(run.stderr ?? '').trim().split('\n')[0]}`);
+            return run.stdout;
+          };
+          try {
+            const known = {};
+            for (let page = 1; page <= 10; page += 1) {
+              const res = await fetch(`${api}/repos/${repo}/issues?labels=flaky-test&state=open&per_page=100&page=${page}`, { headers: { authorization: `Bearer ${GH_TOKEN}`, accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(60000) });
+              if (!res.ok) throw new Error(`the open flaky-test issues: ${res.status}`);
+              const batch = await res.json();
+              for (const issue of batch) {
+                const key = /Key: `([0-9a-f]{16})`/.exec(issue.body ?? '')?.[1];
+                if (issue.pull_request || !key || known[key]) continue;
+                const fresh = issue.labels.some((label) => label.name === 'new');
+                known[key] = { issue: issue.number, commit: fresh ? (/^- Commit: (\S+)/m.exec(issue.body)?.[1] ?? '') : null };
+              }
+              if (batch.length < 100) break;
+            }
+            let base = BASE;
+            if (event === 'pull_request') {
+              git('fetch', '--no-tags', '--quiet', '--depth=2', 'origin', tested);
+              base = `${tested}^1`;
+            } else git('fetch', '--no-tags', '--quiet', '--depth=1', 'origin', BASE);
+            const changed = git('diff', '--name-only', '-z', base, tested).split('\0').filter(Boolean);
+            appendFileSync(GITHUB_OUTPUT, `flaky=${JSON.stringify({ known, changed })}\n`);
+            console.log(`flaky: ${Object.keys(known).length} known flakes, ${changed.length} changed files, commit ${SHA}`);
+          } catch (error) {
+            console.log(`::warning title=Flaky::no known flakes (${error.message}), so every flip stays red`);
+          }
+          EOF
+
   deploy:
     needs: lint
     if: inputs.deploy != '' && github.event_name == 'pull_request'
@@ -335,6 +394,14 @@ jobs:
           if [ "$(id -u)" = 0 ] || sudo -n true 2>/dev/null; then DEPS=1; fi
           npx --yes --package @ai-ecoverse/slicc-cdp slicc-cdp install-browser ${DEPS:+--with-deps} ${CHROME:+--version "$CHROME"}
 
+      - name: slicc-flaky
+        if: inputs.flaky-retry > 0
+        env:
+          JOB: ${{ toJSON(job) }}
+        run: |
+          source=$(node -p 'const job = JSON.parse(process.env.JOB); [job.workflow_repository, job.workflow_sha].join("/")')
+          curl -fsSL --retry 3 --max-time 60 -o "$RUNNER_TEMP/slicc-flaky.mjs" "https://raw.githubusercontent.com/$source/bin/slicc-flaky.mjs"
+
       - name: Integration tests
         env:
           TEST: ${{ inputs.test }}
@@ -344,6 +411,11 @@ jobs:
           EXTRA_NODE_OPTIONS: ${{ inputs.node-options }}
           STAGING_URL: ${{ needs.deploy.outputs.url }}
           SLICC_ARTIFACTS: ${{ inputs.artifacts != '' && format('{0}/artifacts', runner.temp) || '' }}
+          FLAKY_RETRY: ${{ inputs.flaky-retry }}
+          FLAKY: ${{ needs.lint.outputs.flaky }}
+          STRICT: ${{ inputs.strict-tests }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         run: |
           shard=node_modules/@ai-ecoverse/slicc-shared-web/harness/shard.cjs
           [ -f "$shard" ] || shard=harness/shard.cjs
@@ -371,7 +443,11 @@ jobs:
             export DISPLAY=:99
           fi
           export SLICC_TEST_FILES SLICC_TEST_ALL SLICC_TEST_SHARD SLICC_TEST_JUNIT SLICC_TEST_DOWNLOADS SLICC_TEST_NODE_OPTIONS NODE_OPTIONS
-          bash -eo pipefail -c "$TEST"
+          if [ "$FLAKY_RETRY" -gt 0 ]; then
+            node "$RUNNER_TEMP/slicc-flaky.mjs" retry
+          else
+            bash -eo pipefail -c "$TEST"
+          fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
@@ -379,6 +455,14 @@ jobs:
           name: junit-${{ matrix.shard }}
           overwrite: true
           path: junit/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always() && inputs.flaky-retry > 0
+        with:
+          name: failed-${{ matrix.shard }}-${{ github.run_attempt }}
+          overwrite: true
+          path: ${{ runner.temp }}/slicc-flaky/failed/
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -440,24 +524,42 @@ jobs:
           path: |
             junit/**/*.times
             junit/**/*.xml
+            !junit/**/*.retry.xml
           if-no-files-found: ignore
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ inputs.node-version }}
 
+      - name: slicc-flaky
+        if: inputs.flaky-retry > 0
+        env:
+          JOB: ${{ toJSON(job) }}
+        run: |
+          source=$(node -p 'const job = JSON.parse(process.env.JOB); [job.workflow_repository, job.workflow_sha].join("/")')
+          curl -fsSL --retry 3 --max-time 60 -o "$RUNNER_TEMP/slicc-flaky.mjs" "https://raw.githubusercontent.com/$source/bin/slicc-flaky.mjs"
+
+      - name: Flaky verdict
+        if: inputs.flaky-retry > 0
+        env:
+          FLAKY: ${{ needs.lint.outputs.flaky }}
+          STRICT: ${{ inputs.strict-tests }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node "$RUNNER_TEMP/slicc-flaky.mjs" verdict
+
       - env:
           RESULT: ${{ needs.test.result }}
           WINDOWS: ${{ inputs.windows-test != '' && needs.windows.result || 'off' }}
           REQUIRE: ${{ inputs.require-tests }}
           FILES: ${{ needs.lint.outputs.files }}
+          VERDICT: ${{ inputs.flaky-retry > 0 && format('{0}/slicc-flaky/verdict.json', runner.temp) || '' }}
         run: |
           node --input-type=module <<'EOF'
           import { globSync, readFileSync } from 'node:fs';
-          const { RESULT, WINDOWS, REQUIRE, FILES } = process.env;
+          const { RESULT, WINDOWS, REQUIRE, FILES, VERDICT } = process.env;
           const files = REQUIRE === 'true' ? JSON.parse(FILES || '[]') : [];
           const shards = new Map(files.map((file) => [file, new Set()]));
-          const reports = globSync('junit/**/*.xml');
+          const reports = globSync('junit/**/*.xml').filter((report) => !report.endsWith('.retry.xml'));
           let tests = 0;
           let skipped = 0;
           let failed = 0;
@@ -473,6 +575,8 @@ jobs:
               if (/<(failure|error)\b/.test(body)) failed += 1;
             }
           }
+          const flaky = VERDICT ? JSON.parse(readFileSync(VERDICT, 'utf8')) : undefined;
+          if (flaky) failed = flaky.failed;
           const lists = globSync('junit/**/*.files');
           for (const list of lists) {
             for (const file of readFileSync(list, 'utf8').split('\n')) shards.get(file)?.add(list.split('/')[1]);
@@ -492,9 +596,49 @@ jobs:
             : '';
           const once = files.length - missing.length - twice.length;
           const ran = `${tests} tests${skipped ? ` (${skipped} skipped)` : ''} in ${reports.length} JUnit reports${files.length ? `, ${once} of ${files.length} test-glob files on exactly one shard` : ''}${WINDOWS === 'success' ? ', windows passed' : ''}`;
-          console.log(why ? `integration: FAIL ${why} (${ran})` : `integration: PASS ${ran}`);
+          const flakes = flaky?.known.length ? `, ${flaky.known.length} known flake${flaky.known.length === 1 ? '' : 's'} passed on retry (${flaky.known.join(', ')})` : '';
+          console.log(why ? `integration: FAIL ${why} (${ran})` : `integration: PASS ${ran}${flakes}`);
           process.exit(why ? 1 : 0);
           EOF
+
+  flaky:
+    needs: [lint, test, integration]
+    if: inputs.flaky-retry > 0 && (github.event_name == 'pull_request' || github.event_name == 'merge_group') && !cancelled()
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    continue-on-error: true
+    permissions:
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        continue-on-error: true
+        with:
+          pattern: junit-*
+          path: junit
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: slicc-flaky
+        if: inputs.flaky-retry > 0
+        env:
+          JOB: ${{ toJSON(job) }}
+        run: |
+          source=$(node -p 'const job = JSON.parse(process.env.JOB); [job.workflow_repository, job.workflow_sha].join("/")')
+          curl -fsSL --retry 3 --max-time 60 -o "$RUNNER_TEMP/slicc-flaky.mjs" "https://raw.githubusercontent.com/$source/bin/slicc-flaky.mjs"
+
+      - name: Flaky report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLAKY: ${{ needs.lint.outputs.flaky }}
+          STRICT: ${{ inputs.strict-tests }}
+          QUIET: ${{ inputs.flaky-quiet-branches }}
+          CLOSE_AFTER: ${{ inputs.flaky-close-after }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node "$RUNNER_TEMP/slicc-flaky.mjs" report
 
   context:
     needs: lint
