@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -163,4 +163,41 @@ test('npm unreachable or a 5xx with nothing cached still fails the request', asy
     assert.deepEqual(await intercepted(status, attestation), [
       { method: 'Fetch.failRequest', requestId: 'r1', errorReason: 'Failed' },
     ]);
+});
+
+test('a test process lists each tarball and versioned CDN file it served once, in SLICC_TEST_DOWNLOADS', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'slicc-cdn-'));
+  dirs.push(cwd);
+  const list = join(cwd, 'shard.downloads');
+  const versioned = 'https://cdn.jsdelivr.net/npm/@scope/tar@1.2.3-beta.1/dist/index.js';
+  const urls = [
+    packument,
+    tarball,
+    versioned,
+    'https://cdn.jsdelivr.net/npm/modern-tar@latest/dist/web/index.js',
+    'https://cdn.jsdelivr.net/npm/modern-tar@0.8.6',
+    'https://raw.githubusercontent.com/ai-ecoverse/homescoop/main/certification-exceptions.json',
+    `${tarball}?cache=no`,
+  ];
+  const listed = async (upstream) => {
+    const { stdout } = await run(process.execPath, ['--input-type=module', '-e', script], {
+      cwd,
+      env: {
+        ...process.env,
+        HARNESS: harness,
+        UPSTREAM: upstream,
+        URLS: JSON.stringify(urls),
+        SLICC_TEST_DOWNLOADS: list,
+      },
+    });
+    return JSON.parse(stdout);
+  };
+  assert.equal((await listed('v1')).calls, 7);
+  assert.equal(await readFile(list, 'utf8'), `${tarball}\n${versioned}\n`);
+  assert.equal((await listed('down')).calls, 3);
+  assert.equal(await readFile(list, 'utf8'), `${tarball}\n${versioned}\n`.repeat(2));
+  await rm(join(cwd, 'node_modules'), { recursive: true });
+  await rm(list);
+  await listed('gone');
+  assert.equal(await readFile(list, 'utf8').catch((error) => error.code), 'ENOENT');
 });
