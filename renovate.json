@@ -1,4 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>ai-ecoverse/slicc-shared-web"]
+  "description": [
+    "Trial for this repo only: Renovate adds its green PRs to the merge queue itself instead of arming GitHub auto-merge. Re-arming auto-merge right after a rebase can queue the PR's stale head, which the queue drops as a merge conflict or merges without the rebase."
+  ],
+  "extends": ["github>ai-ecoverse/slicc-shared-web"],
+  "platformAutomerge": false
 }
