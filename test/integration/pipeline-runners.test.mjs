@@ -129,13 +129,9 @@ test('context takes the diff from git and survives an API quota running out', ()
   assert.doesNotMatch(text, /search_artifacts: true/);
 });
 
-test('lint plans the split once from the latest merge queue run, else the latest pull request run', () => {
+test('lint plans the split once from earlier merge queue runs, else pull request runs', () => {
   const lint = jobs().lint.join('\n');
-  assert.match(lint, /id: queued[\s\S]*?event: merge_group/);
-  assert.match(
-    lint,
-    /if: [^\n]*steps\.queued\.outputs\.found_artifact != 'true'[\s\S]*?event: pull_request/
-  );
+  assert.match(lint, /for \(const event of \['merge_group', 'pull_request'\]\)/);
   assert.match(lint, /split: \$\{\{ steps\.split\.outputs\.split \}\}/);
   assert.match(lint, /id: split\n {8}if: [^\n]+\n {8}shell: bash\n/);
   const test = jobs().test.join('\n');
@@ -381,7 +377,7 @@ test('reviewers deny only for likely, confirmed problems and comment on narrow r
 
 test('the split weighs each file by its own wall time when shard.cjs recorded one', () => {
   const lint = jobs().lint.join('\n');
-  assert.match(lint, /junit-download\/\*\*\/\*\.times/);
+  assert.match(lint, /\/\\\.\(times\|xml\)\$\/\.test\(name\)/);
   assert.match(lint, /for \(const \[file, wall\] of walls\) seconds\.set\(file, wall\);/);
 });
 
