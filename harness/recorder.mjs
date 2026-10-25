@@ -4,6 +4,7 @@ import { cwd } from 'node:process';
 import { pathToFileURL } from 'node:url';
 import * as mcrUtil from 'monocart-coverage-reports/util';
 import { CRASHED } from './cdp.mjs';
+import { targetLog } from './targets.mjs';
 import { trace } from './trace.mjs';
 import { bounded, ignore, raw, samples, sleep, TIMED_OUT } from './util.mjs';
 
@@ -243,6 +244,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
   const parents = new Map();
   const tabs = new Map();
   const early = [];
+  const targets = targetLog(cdp);
   const own = ownership(parents);
   const ours = covered(server, coverage);
   let run = null;
@@ -285,14 +287,10 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
     const list = commands(targetInfo, { coverage, exits, profiling });
     if (waitingForDebugger) list.push(['Runtime.runIfWaitingForDebugger']);
     const ready = Promise.all(
-      list.map(([method, params]) => cdp.send(method, params, sessionId).catch(ignore))
+      list.map(([method, params]) => targets.send(method, params, sessionId))
     );
     if (targetInfo.type === 'page') tab(targetInfo.targetId).resolve(ready.then(() => sessionId));
     return ready;
-  }
-
-  function resume(sessionId) {
-    return cdp.send('Runtime.runIfWaitingForDebugger', {}, sessionId).catch(ignore);
   }
 
   function log(sessionId, line) {
@@ -333,7 +331,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
   async function lifecycle({ method, params, sessionId }) {
     if (method === 'Target.attachedToTarget') {
       if (own.adopt(params, sessionId)) await attach(params);
-      else if (own.ours(params.sessionId)) await resume(params.sessionId);
+      else if (own.ours(params.sessionId)) await targets.resume(params.sessionId);
     }
     if (method === 'Target.detachedFromTarget') {
       sessions.delete(params.sessionId);
@@ -341,7 +339,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
       own.drop(params.sessionId);
     }
     const restarted = method === 'Inspector.targetReloadedAfterCrash';
-    if (restarted && own.ours(sessionId)) await resume(sessionId);
+    if (restarted && own.ours(sessionId)) await targets.resume(sessionId);
   }
 
   cdp.on(async ({ method, params, sessionId }) => {
@@ -378,6 +376,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
   }
 
   function begin(context, dir, name) {
+    targets.begin();
     run = {
       context,
       dir,
@@ -401,6 +400,7 @@ export function recorder(cdp, server, { coverage = ['/'], exits = new Map(), pro
     await mkdir(raw, { recursive: true });
     await mkdir(samples, { recursive: true });
     await Promise.all([
+      writeFile(new URL('targets.log', current.dir), targets.text()),
       writeFile(new URL(`${current.name}.json`, raw), JSON.stringify(entries.filter(Boolean))),
       writeFile(new URL(`${current.name}.json`, samples), JSON.stringify(found)),
       writeFile(
