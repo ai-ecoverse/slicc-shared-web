@@ -125,59 +125,93 @@ jobs:
           echo "total=$total" >> "$GITHUB_OUTPUT"
           echo "shards=$(node -p "JSON.stringify([...Array($total).keys()])")" >> "$GITHUB_OUTPUT"
 
-      - id: queued
-        if: github.event_name != 'push'
-        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
-        continue-on-error: true
-        with:
-          name: ^junit-
-          name_is_regexp: true
-          event: merge_group
-          workflow_conclusion: completed
-          if_no_artifact_found: ignore
-          path: ${{ runner.temp }}/junit-download
-
-      - if: github.event_name != 'push' && steps.queued.outputs.found_artifact != 'true'
-        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477
-        continue-on-error: true
-        with:
-          name: ^junit-
-          name_is_regexp: true
-          event: pull_request
-          workflow_conclusion: completed
-          if_no_artifact_found: ignore
-          path: ${{ runner.temp }}/junit-download
-
       - id: split
         if: github.event_name != 'push'
         shell: bash
         env:
           GLOB: ${{ inputs.test-glob }}
           TOTAL: ${{ steps.shards.outputs.total }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           node --input-type=module <<'EOF' | tee -a "$GITHUB_OUTPUT"
-          import { globSync, readFileSync } from 'node:fs';
-          const { GLOB, TOTAL, RUNNER_TEMP } = process.env;
+          import { globSync } from 'node:fs';
+          import { inflateRawSync } from 'node:zlib';
+          const { GLOB, TOTAL, GH_TOKEN, GITHUB_API_URL: api, GITHUB_REPOSITORY: repo, GITHUB_RUN_ID: self } = process.env;
+          const RUNS = 5;
           const files = globSync(GLOB, { exclude: (file) => file.includes('node_modules') }).sort();
-          const seconds = new Map();
-          for (const report of globSync(`${RUNNER_TEMP}/junit-download/**/*.xml`)) {
-            for (const [, attrs] of readFileSync(report, 'utf8').matchAll(/<testcase\b([^>]*?)\/?>/g)) {
-              const path = /\bfile="([^"]*)"/.exec(attrs)?.[1] ?? '';
-              const file = files.find((candidate) => path === candidate || path.endsWith(`/${candidate}`));
-              if (file) seconds.set(file, (seconds.get(file) ?? 0) + Number(/\btime="([^"]*)"/.exec(attrs)?.[1] ?? 0));
+          const get = async (path) => {
+            const res = await fetch(`${api}/${path}`, { headers: { authorization: `Bearer ${GH_TOKEN}`, accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(60000) });
+            if (!res.ok) throw new Error(`${path}: ${res.status}`);
+            return path.endsWith('/zip') ? Buffer.from(await res.arrayBuffer()) : res.json();
+          };
+          const unzip = (zip) => {
+            const entries = [];
+            const end = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+            for (let at = zip.readUInt32LE(end + 16), left = zip.readUInt16LE(end + 10); left > 0; left--) {
+              const size = zip.readUInt32LE(at + 20);
+              const named = zip.readUInt16LE(at + 28);
+              const name = zip.toString('utf8', at + 46, at + 46 + named);
+              const local = zip.readUInt32LE(at + 42);
+              const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
+              const data = zip.subarray(start, start + size);
+              if (/\.(times|xml)$/.test(name)) entries.push([name, String(zip.readUInt16LE(at + 10) === 8 ? inflateRawSync(data) : data)]);
+              at += 46 + named + zip.readUInt16LE(at + 30) + zip.readUInt16LE(at + 32);
             }
-          }
-          const walls = new Map();
-          for (const report of globSync(`${RUNNER_TEMP}/junit-download/**/*.times`)) {
-            for (const line of readFileSync(report, 'utf8').split('\n').filter(Boolean)) {
-              const { file, ms } = JSON.parse(line);
-              if (files.includes(file)) walls.set(file, (walls.get(file) ?? 0) + ms / 1000);
+            return entries;
+          };
+          const runs = [];
+          try {
+            const { workflow_id } = await get(`repos/${repo}/actions/runs/${self}`);
+            const candidates = [];
+            for (const event of ['merge_group', 'pull_request']) {
+              const { workflow_runs } = await get(`repos/${repo}/actions/workflows/${workflow_id}/runs?event=${event}&status=completed&per_page=20`);
+              candidates.push(...workflow_runs.filter((run) => String(run.id) !== self && run.head_repository?.full_name === repo).map((run) => ({ id: run.id, event })));
             }
+            const { artifacts: timings } = await get(`repos/${repo}/actions/artifacts?name=timings&per_page=100`);
+            const timed = new Map(timings.filter((artifact) => !artifact.expired).map((artifact) => [artifact.workflow_run?.id, [artifact]]));
+            let chosen = candidates.filter((run) => timed.has(run.id)).slice(0, RUNS).map((run) => ({ ...run, artifacts: timed.get(run.id) }));
+            for (const run of chosen.length ? [] : candidates.slice(0, 6)) {
+              const { artifacts } = await get(`repos/${repo}/actions/runs/${run.id}/artifacts?per_page=100`);
+              const junit = artifacts.filter((artifact) => !artifact.expired && artifact.name.startsWith('junit-'));
+              if (junit.length) {
+                chosen = [{ ...run, artifacts: junit }];
+                break;
+              }
+            }
+            for (const { artifacts, ...run } of chosen) {
+              const entries = [];
+              for (const artifact of artifacts) entries.push(...unzip(await get(`repos/${repo}/actions/artifacts/${artifact.id}/zip`)));
+              runs.push({ ...run, entries });
+            }
+          } catch (error) {
+            console.error(`::warning title=Split::timings of earlier runs, stopped at ${error.message}`);
           }
-          for (const [file, wall] of walls) seconds.set(file, wall);
-          const known = [...seconds.values()];
+          const weights = new Map();
+          const walled = new Set();
+          for (const { entries } of runs) {
+            const seconds = new Map();
+            const walls = new Map();
+            for (const [name, text] of entries) {
+              if (name.endsWith('.xml')) {
+                for (const [, attrs] of text.matchAll(/<testcase\b([^>]*?)\/?>/g)) {
+                  const path = /\bfile="([^"]*)"/.exec(attrs)?.[1] ?? '';
+                  const file = files.find((candidate) => path === candidate || path.endsWith(`/${candidate}`));
+                  if (file) seconds.set(file, (seconds.get(file) ?? 0) + Number(/\btime="([^"]*)"/.exec(attrs)?.[1] ?? 0));
+                }
+              } else {
+                for (const line of text.split('\n').filter(Boolean)) {
+                  const { file, ms } = JSON.parse(line);
+                  if (files.includes(file)) walls.set(file, (walls.get(file) ?? 0) + ms / 1000);
+                }
+              }
+            }
+            for (const [file, wall] of walls) seconds.set(file, wall);
+            for (const [file, time] of seconds) weights.set(file, Math.max(weights.get(file) ?? 0, time));
+            for (const file of walls.keys()) walled.add(file);
+          }
+          const known = [...weights.values()];
           const guess = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 1;
-          const weight = (file) => seconds.get(file) ?? guess;
+          const weight = (file) => weights.get(file) ?? guess;
           const shards = Array.from({ length: Number(TOTAL) }, () => ({ load: 0, files: [] }));
           for (const file of [...files].sort((a, b) => weight(b) - weight(a) || a.localeCompare(b))) {
             const lightest = shards.reduce((min, shard) => (shard.load < min.load ? shard : min));
@@ -185,7 +219,8 @@ jobs:
             lightest.files.push(file);
           }
           shards.forEach((shard, i) => console.error(`shard ${i}: ${shard.files.length} files, ~${Math.round(shard.load)} s`));
-          console.error(`timings for ${seconds.size} of ${files.length} files, ${walls.size} by wall time`);
+          const from = runs.map((run) => `${run.event} ${run.id}`).join(', ');
+          console.error(`timings for ${weights.size} of ${files.length} files, ${walled.size} by wall time, the most each took in ${runs.length} runs${from ? ` (${from})` : ''}`);
           console.log(`split=${JSON.stringify(shards.map((shard) => shard.files.join('\n')))}`);
           console.log(`files=${JSON.stringify(files)}`);
           EOF
@@ -396,6 +431,15 @@ jobs:
         with:
           pattern: junit-*
           path: junit
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: timings
+          overwrite: true
+          path: |
+            junit/**/*.times
+            junit/**/*.xml
+          if-no-files-found: ignore
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
