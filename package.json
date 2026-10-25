@@ -11,6 +11,14 @@
   "engines": {
     "node": ">=24"
   },
+  "slicc": {
+    "unitSources": [
+      "bin",
+      "harness",
+      "testing",
+      "unit"
+    ]
+  },
   "fledgling": {
     "provider": "github",
     "workflow": "ci.yml",
@@ -61,7 +69,7 @@
     "lint": "bin/slicc-lint.sh && shellcheck bin/*.sh",
     "pretest": "slicc-cdp install-browser",
     "test": "SLICC_PROFILE=1 node --test --test-global-setup=harness/global.mjs test/integration/*.test.mjs && node test/integration/verify.mjs",
-    "test:unit": "mcr -c test/unit/mcr.config.mjs node --test 'test/unit/**/*.test.mjs'",
+    "test:unit": "mcr -c mcr.config.mjs node --test 'test/unit/**/*.test.mjs'",
     "trust": "npx fledgling sync -y --skip-publish",
     "trust:dry": "npx fledgling sync --dry-run -y --skip-publish",
     "release": "semantic-release"
