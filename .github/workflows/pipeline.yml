@@ -1078,6 +1078,7 @@ jobs:
           name_is_regexp: true
           event: pull_request
           workflow_conclusion: success
+          allow_forks: false
           if_no_artifact_found: ignore
           path: ${{ runner.temp }}/junit-download
 
@@ -1109,7 +1110,7 @@ jobs:
             const url = URL.parse(line);
             if (!url || url.protocol !== 'https:' || url.search) return;
             const { hostname, host, pathname } = url;
-            const fixed = hostname.startsWith('registry.') ? /\/-\/[^/]+\.tgz$/.test(pathname) : hostname === 'cdn.jsdelivr.net' && version.test(pathname);
+            const fixed = hostname === 'registry.npmjs.org' ? /\/-\/[^/]+\.tgz$/.test(pathname) : hostname === 'cdn.jsdelivr.net' && version.test(pathname);
             const file = join(root, host, pathname);
             if (fixed && !relative(root, file).startsWith('..')) return file;
           };

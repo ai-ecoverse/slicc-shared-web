@@ -80,6 +80,7 @@ test('only a push to main saves the cache, from the lists of the newest successf
     assert.match(step, /name: \^junit-\n/);
   }
   assert.match(fallback, /if: steps\.queued\.outputs\.found_artifact != 'true'\n/);
+  assert.match(fallback, /allow_forks: false\n/);
   const keyed = all.find((step) => step.includes('hashFiles('));
   assert.ok(keyed.includes(locks) && keyed.includes(key), keyed);
   const restored = all.find((step) => restore.test(step));
@@ -168,6 +169,7 @@ test('the push job fetches what the shards listed, keeps what it has, prunes the
       'https://cdn.jsdelivr.net/npm/modern-tar@latest/dist/web/index.js',
       versioned,
       `http://registry.npmjs.org/left-pad/-/left-pad-1.2.0.tgz`,
+      'https://registry.attacker.example/x/-/x-1.0.0.tgz',
       `${registry}/left-pad/-/left-pad-1.2.0.tgz?x=1`,
       'not a url',
       '',
