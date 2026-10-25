@@ -11,6 +11,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, sep } from 'node:path';
@@ -216,7 +217,17 @@ export function isKnown(entry, sha) {
   );
 }
 
-function category(test, { known, strict, changed, sha }) {
+export function listed(text) {
+  try {
+    const parsed = JSON.parse(text || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function category(test, { known, strict, changed, sha, tests }) {
+  if (!tests.includes(test.file)) return 'unattributed';
   if (strict.some((glob) => matchesGlob(test.file, glob))) return 'strict';
   if (changed.includes(test.file)) return 'changed';
   return isKnown(known[key(test)], sha) ? 'known' : 'new';
@@ -384,14 +395,41 @@ function context(env) {
   };
 }
 
-function rules(env) {
+function rules(env, tests) {
   const { known, changed } = lint(env.FLAKY);
-  return { known, changed, strict: globs(env.STRICT), sha: env.SHA || env.GITHUB_SHA || '' };
+  return {
+    known,
+    changed,
+    strict: globs(env.STRICT),
+    sha: env.SHA || env.GITHUB_SHA || '',
+    tests,
+  };
 }
 
-function skipReason({ reports, failing, files, most, elapsed, limit, budget, options }) {
+function regular(file, root) {
+  try {
+    return statSync(join(root, file)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function skipReason({
+  reports,
+  failing,
+  files,
+  tests,
+  root,
+  most,
+  elapsed,
+  limit,
+  budget,
+  options,
+}) {
   if (reports.length === 0) return 'no JUnit report';
   if (failing.length === 0) return 'no failing test in the JUnit report';
+  const nameless = files.find((file) => !tests.includes(file) || !regular(file, root));
+  if (nameless !== undefined) return `a failing test names no test file: ${nameless}`;
   if (files.length > most) return `${files.length} files failed, more than flaky-retry (${most})`;
   if (elapsed + limit > budget) return 'past the time budget';
   if (!options) return 'NODE_OPTIONS names no JUnit destination';
@@ -430,17 +468,19 @@ export async function retry(env = process.env) {
     Boolean(env.SLICC_TEST_JUNIT) &&
     (env.NODE_OPTIONS ?? '').includes(`--test-reporter-destination=${env.SLICC_TEST_JUNIT}`);
   const most = Number(env.FLAKY_RETRY);
+  const given = rules(env, globs(env.SLICC_TEST_ALL));
   const skipped = skipReason({
     reports,
     failing,
     files,
+    tests: given.tests,
+    root: record.root,
     most,
     elapsed: Date.now() - started,
     limit,
     budget,
     options,
   });
-  const given = rules(env);
   if (skipped) {
     record.skipped = skipped;
     record.rows = judge({ first: tests, retry: undefined, rerun: null, ...given }).rows;
@@ -488,7 +528,7 @@ export async function retry(env = process.env) {
 }
 
 export function verdict(env = process.env, dir = 'junit') {
-  const given = rules(env);
+  const given = rules(env, listed(env.FILES));
   const covered = new Set();
   const passed = [];
   let failed = 0;
@@ -847,7 +887,13 @@ function reportContext(env) {
   };
 }
 
-function collect(found, ctx) {
+function named(entry, tests) {
+  if (entry.kind === 'failure' || tests.includes(entry.file)) return true;
+  console.log(`flaky: ${entry.file} › ${entry.name}: not filed: it names no test file`);
+  return false;
+}
+
+function collect(found, ctx, tests) {
   const entries = [];
   const passing = new Set();
   for (const { record, first } of found) {
@@ -867,21 +913,21 @@ function collect(found, ctx) {
     }
   }
   for (const entry of entries) if (entry.kind !== 'failure') passing.delete(entry.key);
-  return { entries, passing };
+  return { entries: entries.filter((entry) => named(entry, tests)), passing };
 }
 
 export async function report(env = process.env, dir = 'junit') {
   const ctx = reportContext(env);
-  const given = rules(env);
+  const given = rules(env, listed(env.FILES));
   const found = shards(dir);
-  const { entries, passing } = collect(found, ctx);
+  const { entries, passing } = collect(found, ctx, given.tests);
   const call = client(ctx);
   const lines = [];
   let notes = new Map();
   try {
     const seen = new Set(entries.map((entry) => entry.key));
     for (const flip of ctx.token ? await earlier(call, ctx, found, given) : []) {
-      if (seen.has(flip.key)) continue;
+      if (seen.has(flip.key) || !named(flip, given.tests)) continue;
       seen.add(flip.key);
       entries.push({ ...flip, strict: flip.kind === 'strict' });
       passing.delete(flip.key);
