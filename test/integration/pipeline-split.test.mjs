@@ -290,7 +290,10 @@ test('when the API fails, every file counts the same and the split still comes o
 
 test('integration uploads the run timings as one artifact, and lint reads earlier runs through the API', () => {
   const upload = steps(job('integration')).find((step) => step.includes('name: timings'));
-  assert.match(upload, /uses: actions\/upload-artifact@[0-9a-f]{40}\n/);
+  assert.match(
+    upload,
+    /uses: actions\/upload-artifact@[0-9a-f]{40}\n {8}continue-on-error: true\n/
+  );
   assert.match(upload, /path: \|\n {12}junit\/\*\*\/\*\.times\n {12}junit\/\*\*\/\*\.xml\n/);
   assert.ok(
     job('integration').indexOf('name: timings') < job('integration').indexOf('integration: FAIL')
