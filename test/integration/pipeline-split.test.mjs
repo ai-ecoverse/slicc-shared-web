@@ -204,37 +204,77 @@ test('a file slow only in an older run is weighted by its slow time', () => {
   );
 });
 
-test('it takes the last five runs with timings, merge queue runs first, never this run, a fork or an expired artifact', () => {
+test('it takes the last ten runs with timings, merge queue runs first, never this run, a fork or an expired artifact', () => {
   const { stderr, calls } = split(
     api({
-      queued: [run(999, 'merge_group'), run(8, 'merge_group'), run(7, 'merge_group')],
-      pulls: [
-        run(6, 'pull_request'),
-        run(5, 'pull_request', 'fork/r'),
-        run(4, 'pull_request'),
-        run(3, 'pull_request'),
-        run(2, 'pull_request'),
-        run(1, 'pull_request'),
-      ],
-      timings: [9990, 80, 70, 60, 50, 40, 30, 20, 10].map((id) =>
-        artifact(id, 'timings', id === 9990 ? 999 : id / 10, id === 70)
+      queued: [999, 14, 13, 12].map((id) => run(id, 'merge_group')),
+      pulls: [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map((id) =>
+        run(id, 'pull_request', id === 10 ? 'fork/r' : 'o/r')
+      ),
+      timings: [9990, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 20, 10].map((id) =>
+        artifact(id, 'timings', id === 9990 ? 999 : id / 10, id === 130)
       ),
       zips: Object.fromEntries(
-        [80, 60, 40, 30, 20, 10].map((id) => [id, [['junit-0/0-1.times', times([['a', id]])]]])
+        [140, 120, 110, 90, 80, 70, 60, 50, 40, 30, 20, 10].map((id) => [
+          id,
+          [['junit-0/0-1.times', times([['a', id]])]],
+        ])
       ),
     })
   );
   assert.match(
     stderr,
-    /the most each took in 5 runs \(merge_group 8, pull_request 6, pull_request 4, pull_request 3, pull_request 2\)\n/
+    /the most each took in 10 runs \(merge_group 14, merge_group 12, pull_request 11, pull_request 9, pull_request 8, pull_request 7, pull_request 6, pull_request 5, pull_request 4, pull_request 3\)\n/
   );
   assert.match(
     stderr,
-    /shard 0: 2 files, ~160 s\nshard 1: 2 files, ~160 s\ntimings for 1 of 4 files/
+    /shard 0: 2 files, ~280 s\nshard 1: 2 files, ~280 s\ntimings for 1 of 4 files/
   );
+  assert.match(stderr, /\n0 files took over twice their median at most, spread evenly first\n/);
   assert.deepEqual(
     calls.filter((path) => path.endsWith('/zip')),
-    [80, 60, 40, 30, 20].map((id) => `repos/o/r/actions/artifacts/${id}/zip`)
+    [140, 120, 110, 90, 80, 70, 60, 50, 40, 30].map((id) => `repos/o/r/actions/artifacts/${id}/zip`)
+  );
+});
+
+test('files that took over twice their median at most go one per shard before the rest fill by weight', () => {
+  const rows = [
+    [
+      ['a', 100],
+      ['b', 20],
+      ['c', 10],
+      ['d', 10],
+    ],
+    [
+      ['a', 100],
+      ['b', 60],
+      ['c', 10],
+      ['d', 10],
+    ],
+    [
+      ['a', 100],
+      ['b', 20],
+      ['c', 40],
+      ['d', 10],
+    ],
+  ];
+  const { shards, stderr } = split(
+    api({
+      queued: [run(3, 'merge_group'), run(2, 'merge_group'), run(1, 'merge_group')],
+      timings: [30, 20, 10].map((id) => artifact(id, 'timings', id / 10)),
+      zips: Object.fromEntries(
+        rows.map((row, i) => [30 - i * 10, [['junit-0/0-1.times', times(row)]]])
+      ),
+    })
+  );
+  assert.deepEqual(shards, [
+    ['b', 'd'],
+    ['c', 'a'],
+  ]);
+  assert.match(stderr, /shard 0: 2 files, ~70 s\nshard 1: 2 files, ~140 s\n/);
+  assert.match(
+    stderr,
+    /\n2 files took over twice their median at most, spread evenly first: test\/integration\/b\.test\.mjs, test\/integration\/c\.test\.mjs\n/
   );
 });
 

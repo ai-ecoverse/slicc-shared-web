@@ -153,7 +153,7 @@ jobs:
           import { globSync } from 'node:fs';
           import { inflateRawSync } from 'node:zlib';
           const { GLOB, TOTAL, GH_TOKEN, GITHUB_API_URL: api, GITHUB_REPOSITORY: repo, GITHUB_RUN_ID: self } = process.env;
-          const RUNS = 5;
+          const RUNS = 10;
           const files = globSync(GLOB, { exclude: (file) => file.includes('node_modules') }).sort();
           const get = async (path) => {
             const res = await fetch(`${api}/${path}`, { headers: { authorization: `Bearer ${GH_TOKEN}`, accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(60000) });
@@ -202,7 +202,7 @@ jobs:
           } catch (error) {
             console.error(`::warning title=Split::timings of earlier runs, stopped at ${error.message}`);
           }
-          const weights = new Map();
+          const samples = new Map();
           const walled = new Set();
           for (const { entries } of runs) {
             const seconds = new Map();
@@ -222,21 +222,27 @@ jobs:
               }
             }
             for (const [file, wall] of walls) seconds.set(file, wall);
-            for (const [file, time] of seconds) weights.set(file, Math.max(weights.get(file) ?? 0, time));
+            for (const [file, time] of seconds) samples.set(file, [...(samples.get(file) ?? []), time]);
             for (const file of walls.keys()) walled.add(file);
           }
+          const weights = new Map([...samples].map(([file, times]) => [file, Math.max(...times)]));
+          const swings = new Set([...samples].filter(([file, times]) => weights.get(file) > 2 * times.sort((a, b) => a - b)[(times.length - 1) >> 1]).map(([file]) => file));
           const known = [...weights.values()];
           const guess = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 1;
           const weight = (file) => weights.get(file) ?? guess;
-          const shards = Array.from({ length: Number(TOTAL) }, () => ({ load: 0, files: [] }));
-          for (const file of [...files].sort((a, b) => weight(b) - weight(a) || a.localeCompare(b))) {
-            const lightest = shards.reduce((min, shard) => (shard.load < min.load ? shard : min));
+          const shards = Array.from({ length: Number(TOTAL) }, () => ({ load: 0, swings: 0, files: [] }));
+          const order = [...files].sort((a, b) => weight(b) - weight(a) || a.localeCompare(b));
+          for (const file of [...order.filter((file) => swings.has(file)), ...order.filter((file) => !swings.has(file))]) {
+            const swing = swings.has(file);
+            const lightest = shards.reduce((min, shard) => ((swing && shard.swings !== min.swings ? shard.swings < min.swings : shard.load < min.load) ? shard : min));
             lightest.load += weight(file);
+            lightest.swings += swing;
             lightest.files.push(file);
           }
           shards.forEach((shard, i) => console.error(`shard ${i}: ${shard.files.length} files, ~${Math.round(shard.load)} s`));
           const from = runs.map((run) => `${run.event} ${run.id}`).join(', ');
           console.error(`timings for ${weights.size} of ${files.length} files, ${walled.size} by wall time, the most each took in ${runs.length} runs${from ? ` (${from})` : ''}`);
+          console.error(`${swings.size} files took over twice their median at most, spread evenly first${swings.size ? `: ${order.filter((file) => swings.has(file)).join(', ')}` : ''}`);
           console.log(`split=${JSON.stringify(shards.map((shard) => shard.files.join('\n')))}`);
           console.log(`files=${JSON.stringify(files)}`);
           EOF
