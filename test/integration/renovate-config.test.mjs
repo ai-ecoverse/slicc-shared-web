@@ -14,7 +14,9 @@ let dir;
 
 before(async () => {
   const ci = await readFile(join(repo, '.github/workflows/ci.yml'), 'utf8');
-  const [, version] = /^\s*RENOVATE=(\S+)$/m.exec(ci);
+  const pin = /^\s*RENOVATE=(\S+)$/m.exec(ci);
+  assert.ok(pin, 'RENOVATE=<version> pin not found in .github/workflows/ci.yml');
+  const [, version] = pin;
   dir = await mkdtemp(join(tmpdir(), 'slicc-renovate-'));
   await writeFile(join(dir, 'package.json'), '{"private":true}');
   await run(
