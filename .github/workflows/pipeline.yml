@@ -100,7 +100,7 @@ permissions:
 env:
   LEFTHOOK: '0'
   FINDINGS_SCHEMA: >-
-    {"type":"object","additionalProperties":false,"required":["verdict","summary","comments","issues"],"properties":{"verdict":{"type":"string","enum":["approved","denied"]},"summary":{"type":"string"},"comments":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"type":"string"},"line":{"type":"integer"},"body":{"type":"string"}}}},"issues":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["repo","title","body"],"properties":{"repo":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}}}}}}
+    {"type":"object","additionalProperties":false,"required":["verdict","summary","comments","issues"],"properties":{"verdict":{"type":"string","enum":["approved","denied"]},"summary":{"type":"string"},"comments":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"type":"string"},"line":{"type":"integer"},"body":{"type":"string"}}}},"issues":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["repo","title","body","security"],"properties":{"repo":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"security":{"type":"boolean"}}}}}}
 
 jobs:
   lint:
@@ -873,8 +873,10 @@ jobs:
           - verdict: "approved" or "denied".
           - summary: a few sentences on the change and your verdict.
           - comments: findings on lines the pull request adds or changes, with path relative to the repository root and the line number in the head.
-          - issues: problems worth tracking outside this pull request, each with repo as owner/name, a title and a body.
+          - issues: problems worth tracking outside this pull request, each with repo as owner/name, a title, a body and security.
             Leave out any that $RUNNER_TEMP/review/context/issues.json already has open, even under another title.
+            security is true for anything about a security or secret exposure, a guard bypass, or protected data reaching where it shouldn't, and false for everything else.
+            Put a security finding in the summary or a line comment of this review, never as an issue: an issue with security true is never filed.
           Screenshots: when a finding is about what a page shows, save a PNG to $RUNNER_TEMP/review/shots/ (a name of letters, digits, dots, dashes or underscores; at most $SHOTS files) and put it in the summary, a comment or an issue body as ![what it shows](shots/name.png). They're published with your findings.
 
           $EXTRA
@@ -1066,6 +1068,10 @@ jobs:
                 .catch(() => once(fallback, () => post(`repos/${repo}/issues/${PR}/comments`, { body: fallback })));
             }
             for (const issue of findings.issues) {
+              if (issue.security !== false) {
+                console.log(`kept ${issue.security === true ? 'a security finding' : 'an issue without a boolean security field'} out of the issue tracker (${agent})`);
+                continue;
+              }
               const target = issue.repo || repo;
               if (target.split('/')[0] !== repo.split('/')[0]) {
                 console.log(`skipped an issue for ${target}, outside ${repo.split('/')[0]}: ${issue.title}`);
