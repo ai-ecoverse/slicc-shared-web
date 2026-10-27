@@ -985,7 +985,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha }}
           # renovate: datasource=npm depName=wrangler
-          WRANGLER: 4.151.2
+          WRANGLER: 4.151.3
         run: |
           prefix="$GITHUB_REPOSITORY/pr-$PR/${SHA:0:7}"
           echo "base=$R2_PUBLIC_BASE_URL/$prefix" >> "$GITHUB_OUTPUT"
