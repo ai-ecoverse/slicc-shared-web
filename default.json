@@ -119,6 +119,11 @@
       "addLabels": ["formatter-bump"]
     },
     {
+      "description": "@biomejs/biome 2.6.0 and 2.6.1 were published without their @biomejs/cli-* platform packages, so npm ci fails on them; skip both and take 2.6.2 or later.",
+      "matchPackageNames": ["@biomejs/biome"],
+      "allowedVersions": "!/^2\\.6\\.[01]$/"
+    },
+    {
       "description": "Packages carried with a patch-package patch. A bump orphans the version-pinned patch, so group them and never automerge.",
       "matchPackageNames": ["@zenfs/core", "@zenfs/dom"],
       "groupName": "patched dependencies",
