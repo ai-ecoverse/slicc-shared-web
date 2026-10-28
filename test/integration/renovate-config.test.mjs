@@ -35,12 +35,12 @@ async function resolve(configFile) {
   return JSON.parse(stdout.trim().split('\n').at(-1));
 }
 
-test("this repo's own Renovate PRs automerge through the merge queue without GitHub auto-merge", async () => {
+test("this repo's own Renovate PRs automerge through GitHub auto-merge, like every repo on the preset", async () => {
   for (const upgrade of await resolve(join(repo, 'renovate.json'))) {
     assert.equal(upgrade.automerge, true, upgrade.depName);
     assert.equal(upgrade.automergeType, 'pr', upgrade.depName);
-    assert.equal(upgrade.platformAutomerge, false, upgrade.depName);
-    assert.equal(upgrade.usePlatformAutomerge, false, upgrade.depName);
+    assert.equal(upgrade.platformAutomerge, true, upgrade.depName);
+    assert.equal(upgrade.usePlatformAutomerge, true, upgrade.depName);
   }
 });
 
