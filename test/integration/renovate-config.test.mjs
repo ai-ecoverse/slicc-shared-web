@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 const resolver = fileURLToPath(new URL('renovate-config/resolve.mjs', import.meta.url));
+const lookup = fileURLToPath(new URL('renovate-config/lookup.mjs', import.meta.url));
 let dir;
 
 before(async () => {
@@ -35,6 +36,13 @@ async function resolve(configFile) {
   return JSON.parse(stdout.trim().split('\n').at(-1));
 }
 
+async function offered(configFile, depName, cases) {
+  const args = [lookup, dir, repo, configFile, depName, ...cases];
+  const { stdout } = await run(process.execPath, args);
+  const result = JSON.parse(stdout.trim().split('\n').at(-1));
+  return Object.fromEntries(result.map((r) => [`${r.currentValue}:${r.newVersion}`, r.offered]));
+}
+
 test("this repo's own Renovate PRs automerge through GitHub auto-merge, like every repo on the preset", async () => {
   for (const upgrade of await resolve(join(repo, 'renovate.json'))) {
     assert.equal(upgrade.automerge, true, upgrade.depName);
@@ -51,4 +59,18 @@ test('a repo that only extends the preset keeps GitHub auto-merge', async () => 
     assert.equal(upgrade.automerge, true, upgrade.depName);
     assert.equal(upgrade.usePlatformAutomerge, true, upgrade.depName);
   }
+});
+
+test('a repo that extends the preset is never offered @biomejs/biome 2.6.0 or 2.6.1, which have no platform packages', async () => {
+  const consumer = join(dir, 'biome-consumer.json');
+  await writeFile(consumer, JSON.stringify({ extends: ['github>ai-ecoverse/slicc-shared-web'] }));
+  const cases = {
+    '2.5.15:2.6.0': false,
+    '2.5.15:2.6.1': false,
+    '2.5.15:2.6.2': true,
+    '2.5.15:2.6.3': true,
+    '2.5.0:2.5.15': true,
+    '2.5.14:2.5.15': true,
+  };
+  assert.deepEqual(await offered(consumer, '@biomejs/biome', Object.keys(cases)), cases);
 });
