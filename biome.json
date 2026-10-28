@@ -54,6 +54,12 @@
       "linter": {
         "enabled": false
       }
+    },
+    {
+      "includes": ["**/*.md", "**/*.markdown", "**/*.yml", "**/*.yaml"],
+      "formatter": {
+        "enabled": false
+      }
     }
   ],
   "linter": {
