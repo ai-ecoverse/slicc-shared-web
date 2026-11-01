@@ -314,6 +314,35 @@ test('before any run has uploaded timings, it reads the junit artifacts of the n
   );
 });
 
+test('a junit row whose name has an unescaped > still counts its time', () => {
+  const xml = [
+    '<testsuites>',
+    '<testcase name="a frame at data:text/html,&lt;h1>x&lt;/h1> keeps the lock" time="40" classname="test" file="/w/test/integration/d.test.mjs"/>',
+    '<testcase name="reaches &lt;port>.kernel.localhost" time="20" classname="test" file="/w/test/integration/c.test.mjs"/>',
+    '<testcase name="skipped when a > b" time="0" classname="test" file="/w/test/integration/c.test.mjs">',
+    '<skipped type="skipped" message="true"/>',
+    '</testcase>',
+    '<testcase name="plain" time="5" classname="test" file="/w/test/integration/d.test.mjs"/>',
+    '</testsuites>',
+  ].join('\n');
+  const { shards, stderr } = split(
+    api({
+      queued: [run(2, 'merge_group')],
+      perRun: { 2: [artifact(21, 'junit-0', 2)] },
+      zips: { 21: [['0.xml', xml]] },
+    })
+  );
+  assert.deepEqual(shards, [
+    ['d', 'c'],
+    ['a', 'b'],
+  ]);
+  assert.match(stderr, /shard 0: 2 files, ~65 s\nshard 1: 2 files, ~65 s\n/);
+  assert.match(
+    stderr,
+    /timings for 2 of 4 files, 0 by wall time, the most each took in 1 runs \(merge_group 2\)\n/
+  );
+});
+
 test('when the API fails, every file counts the same and the split still comes out', () => {
   const fixture = api({ queued: [run(3, 'merge_group')], timings: [artifact(30, 'timings', 3)] });
   const { shards, stderr } = split(fixture);
