@@ -209,7 +209,7 @@ jobs:
             const walls = new Map();
             for (const [name, text] of entries) {
               if (name.endsWith('.xml')) {
-                for (const [, attrs] of text.matchAll(/<testcase\b([^>]*?)\/?>/g)) {
+                for (const [, attrs] of text.matchAll(/<testcase\b((?:[^"'>]|"[^"]*"|'[^']*')*?)\/?>/g)) {
                   const path = /\bfile="([^"]*)"/.exec(attrs)?.[1] ?? '';
                   const file = files.find((candidate) => path === candidate || path.endsWith(`/${candidate}`));
                   if (file) seconds.set(file, (seconds.get(file) ?? 0) + Number(/\btime="([^"]*)"/.exec(attrs)?.[1] ?? 0));
@@ -572,7 +572,7 @@ jobs:
           let failed = 0;
           for (const report of reports) {
             const xml = readFileSync(report, 'utf8');
-            for (const [, attrs, body = ''] of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
+            for (const [, attrs, body = ''] of xml.matchAll(/<testcase\b((?:[^"'>]|"[^"]*"|'[^']*')*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
               if (/file="[^"]*\/slicc-shared-web\/unit\/none\.mjs"/.test(attrs)) continue;
               if (/<skipped\b/.test(body)) {
                 skipped += 1;
