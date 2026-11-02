@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -19,7 +28,14 @@ const step = workflow
 
 function release(
   t,
-  { error = 'TLOG_CREATE_ENTRY_ERROR', failures = 1, visible = '', command, dryRun = false } = {}
+  {
+    error = 'TLOG_CREATE_ENTRY_ERROR',
+    failures = 1,
+    visible = '',
+    command,
+    dryRun = false,
+    localNpm = true,
+  } = {}
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'slicc-release-npm-retry-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -47,17 +63,28 @@ if (args[0] !== 'publish' || count <= ${failures}) {
 }
 console.log('published');
 `,
-    npx: `#!/bin/sh\nexec npm ${command ?? `publish '${pkgDir}' ${dryRun ? '--dry-run' : '--provenance'} --tag latest --registry https://registry.example.invalid --userconfig '${join(dir, 'npmrc')}'`}\n`,
+    npx: `#!/usr/bin/env node
+import(${JSON.stringify(import.meta.resolve('execa'))}).then(async ({ execa }) => {
+  const result = await execa('npm', ${JSON.stringify(command ? [command] : ['publish', pkgDir, dryRun ? '--dry-run' : '--provenance', '--tag', 'latest', '--registry', 'https://registry.example.invalid', '--userconfig', join(dir, 'npmrc')])}, { preferLocal: true, reject: false, stdio: 'inherit' });
+  process.exit(result.exitCode ?? 1);
+});
+`,
   };
   for (const [name, contents] of Object.entries(files)) {
     writeFileSync(join(dir, name), contents);
     chmodSync(join(dir, name), 0o755);
+  }
+  const npmBin = join(dir, 'node_modules', '.bin', 'npm');
+  if (localNpm) {
+    mkdirSync(join(dir, 'node_modules', '.bin'), { recursive: true });
+    symlinkSync(join(dir, 'npm'), npmBin);
   }
   const result = spawnSync('bash', ['-e', '-c', step], {
     encoding: 'utf8',
     cwd: dir,
     env: { PATH: `${dir}:${process.env.PATH}`, RUNNER_TEMP: dir, NPM_RETRY_DELAY_MS: '1' },
   });
+  if (localNpm) assert.equal(readlinkSync(npmBin), join(dir, 'npm'));
   const args = readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
   return {
     ...result,
@@ -139,4 +166,10 @@ test('a dry run fails immediately even when the exact version is visible', (t) =
   assert.equal(run.status, 42);
   assert.equal(run.publishes.length, 1);
   assert.equal(run.views.length, 0);
+});
+
+test('publishing also recovers when no local npm binary was installed', (t) => {
+  const run = release(t, { localNpm: false });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.publishes.length, 2);
 });

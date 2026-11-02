@@ -1263,7 +1263,19 @@ jobs:
           }
           EOF
           chmod +x "$shim/git" "$shim/npm"
-          REAL_GIT="$(command -v git)" REAL_NPM="$(command -v npm)" PATH="$shim:$PATH" npx semantic-release
+          npm_bin="$PWD/node_modules/.bin/npm"
+          real_npm="$(command -v npm)"
+          if [ -e "$npm_bin" ]; then
+            real_npm="$(readlink -f "$npm_bin")"
+            mv "$npm_bin" "$npm_bin.slicc-release-original"
+            [ "$real_npm" != "$npm_bin" ] || real_npm="$npm_bin.slicc-release-original"
+            trap 'mv -f "$npm_bin.slicc-release-original" "$npm_bin"' EXIT
+          else
+            mkdir -p "$(dirname "$npm_bin")"
+            trap 'rm -f "$npm_bin"' EXIT
+          fi
+          ln -s "$shim/npm" "$npm_bin"
+          REAL_GIT="$(command -v git)" REAL_NPM="$real_npm" PATH="$shim:$PATH" npx semantic-release
 
       - id: released
         if: ${{ !cancelled() && inputs.attest != '' }}
