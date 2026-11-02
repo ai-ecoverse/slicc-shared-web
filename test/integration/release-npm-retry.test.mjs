@@ -52,13 +52,17 @@ function release(
 const { appendFileSync, readFileSync } = require('node:fs');
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
-if (args[0] === 'view') {
-  console.log(${JSON.stringify(visible)});
-  process.exit(${visible ? 0 : 1});
-}
 const count = readFileSync(${JSON.stringify(calls)}, 'utf8').trim().split('\\n').map(JSON.parse).filter((args) => args[0] === 'publish').length;
+if (args[0] === 'view') {
+  const versions = ${JSON.stringify(visible)};
+  const version = Array.isArray(versions) ? versions[count - 1] : versions;
+  if (version) console.log(version);
+  else console.error('E404 Not Found');
+  process.exit(version ? 0 : 1);
+}
 if (args[0] !== 'publish' || count <= ${failures}) {
-  console.error(${JSON.stringify(error)});
+  const errors = ${JSON.stringify(error)};
+  console.error(Array.isArray(errors) ? errors[count - 1] : errors);
   process.exit(42);
 }
 console.log('published');
@@ -88,6 +92,7 @@ import(${JSON.stringify(import.meta.resolve('execa'))}).then(async ({ execa }) =
   const args = readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
   return {
     ...result,
+    calls: args,
     publishes: args.filter((args) => args[0] === 'publish'),
     views: args.filter((args) => args[0] === 'view'),
   };
@@ -113,11 +118,11 @@ test('a 409 whose exact version is visible counts as published', (t) => {
   assert.equal(run.views.length, 1);
 });
 
-test('other publish failures keep their exit status without a registry check', (t) => {
+test('other publish failures check the registry then keep their exit status without retry', (t) => {
   const run = release(t, { error: 'E403 Forbidden' });
   assert.equal(run.status, 42);
   assert.equal(run.publishes.length, 1);
-  assert.equal(run.views.length, 0);
+  assert.equal(run.views.length, 1);
   assert.match(run.stderr, /E403 Forbidden/);
 });
 
@@ -138,7 +143,7 @@ test('an unrelated 409 is not retried', (t) => {
   const run = release(t, { error: '409 Conflict' });
   assert.equal(run.status, 42);
   assert.equal(run.publishes.length, 1);
-  assert.equal(run.views.length, 0);
+  assert.equal(run.views.length, 1);
 });
 
 test('other npm subcommands pass through once with their exit status', (t) => {
@@ -173,3 +178,36 @@ test('publishing also recovers when no local npm binary was installed', (t) => {
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.publishes.length, 2);
 });
+
+for (const error of [
+  'E403 Forbidden',
+  'EPUBLISHCONFLICT',
+  'You cannot publish over the previously published versions',
+]) {
+  test(`a visible exact version recovers from ${error}`, (t) => {
+    const run = release(t, { error, visible: '1.2.3' });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.publishes.length, 1);
+    assert.equal(run.views.length, 1);
+  });
+}
+
+for (const error of ['E403 Forbidden', 'EPUBLISHCONFLICT']) {
+  test(`a transparency conflict then ${error} succeeds when the version appears`, (t) => {
+    const run = release(t, {
+      error: ['TLOG_CREATE_ENTRY_ERROR', error],
+      failures: 2,
+      visible: ['', '1.2.3'],
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(
+      run.calls.map((args) => args[0]),
+      ['publish', 'view', 'publish', 'view']
+    );
+    assert.equal(run.publishes.length, 2);
+    assert.deepEqual(run.publishes[0], run.publishes[1]);
+    assert.ok(run.publishes.every((args) => args.includes('--provenance')));
+    assert.match(run.stderr, /transparency-log conflict, attempt 1 of 3/);
+    assert.doesNotMatch(run.stderr, /attempt 2 of 3/);
+  });
+}
