@@ -19,7 +19,7 @@ const step = workflow
 
 function release(
   t,
-  { error = 'TLOG_CREATE_ENTRY_ERROR', failures = 1, visible = '', command } = {}
+  { error = 'TLOG_CREATE_ENTRY_ERROR', failures = 1, visible = '', command, dryRun = false } = {}
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'slicc-release-npm-retry-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -47,7 +47,7 @@ if (args[0] !== 'publish' || count <= ${failures}) {
 }
 console.log('published');
 `,
-    npx: `#!/bin/sh\nexec npm ${command ?? `publish '${pkgDir}' --provenance --tag latest --registry https://registry.example.invalid --userconfig '${join(dir, 'npmrc')}'`}\n`,
+    npx: `#!/bin/sh\nexec npm ${command ?? `publish '${pkgDir}' ${dryRun ? '--dry-run' : '--provenance'} --tag latest --registry https://registry.example.invalid --userconfig '${join(dir, 'npmrc')}'`}\n`,
   };
   for (const [name, contents] of Object.entries(files)) {
     writeFileSync(join(dir, name), contents);
@@ -118,5 +118,25 @@ test('other npm subcommands pass through once with their exit status', (t) => {
   const run = release(t, { command: 'whoami' });
   assert.equal(run.status, 42);
   assert.equal(run.publishes.length, 0);
+  assert.equal(run.views.length, 0);
+});
+
+for (const error of [
+  'tlog_create_entry_error',
+  'sigstore transparency log answered 409',
+  '409 Conflict from Rekor',
+]) {
+  test(`a conflict reported as ${error} is retried`, (t) => {
+    const run = release(t, { error });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.publishes.length, 2);
+    assert.equal(run.views.length, 1);
+  });
+}
+
+test('a dry run fails immediately even when the exact version is visible', (t) => {
+  const run = release(t, { dryRun: true, visible: '1.2.3' });
+  assert.equal(run.status, 42);
+  assert.equal(run.publishes.length, 1);
   assert.equal(run.views.length, 0);
 });

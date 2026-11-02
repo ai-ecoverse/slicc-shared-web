@@ -1242,9 +1242,9 @@ jobs:
             const status = result.status ?? 1;
             if (status === 0 || result.error) process.exit(status);
             const output = `${result.stdout}\n${result.stderr}`;
-            const conflict = /TLOG_CREATE_ENTRY_ERROR/.test(output) ||
-              (/\b409\b/.test(output) && /an equivalent entry already exists in the transparency log/i.test(output));
-            if (!conflict) process.exit(status);
+            const conflict = /TLOG_CREATE_ENTRY_ERROR/i.test(output) ||
+              (/\b409\b/.test(output) && /transparency\s+log|sigstore|rekor/i.test(output));
+            if (args.includes('--dry-run') || args.includes('--dry-run=true') || !conflict) process.exit(status);
             try {
               const { name, version } = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
               if (!name || !version) process.exit(status);
