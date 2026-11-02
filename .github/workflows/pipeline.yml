@@ -1215,8 +1215,55 @@ jobs:
             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay * attempt);
           }
           EOF
-          chmod +x "$shim/git"
-          REAL_GIT="$(command -v git)" PATH="$shim:$PATH" npx semantic-release
+          cat > "$shim/npm" <<'EOF'
+          #!/usr/bin/env node
+          const { spawnSync } = require('node:child_process');
+          const { readFileSync } = require('node:fs');
+          const { join } = require('node:path');
+          const npm = process.env.REAL_NPM;
+          const args = process.argv.slice(2);
+          if (args[0] !== 'publish') {
+            const result = spawnSync(npm, args, { stdio: 'inherit' });
+            if (result.error) console.error(`npm-retry: ${result.error.message}`);
+            process.exit(result.status ?? 1);
+          }
+          const directory = args[1] && !args[1].startsWith('-') ? args[1] : '.';
+          const config = [];
+          for (let i = 1; i < args.length; i++) {
+            if (/^--(?:registry|userconfig)=/.test(args[i])) config.push(args[i]);
+            else if (['--registry', '--userconfig'].includes(args[i])) config.push(args[i], args[++i]);
+          }
+          const delay = Number(process.env.NPM_RETRY_DELAY_MS ?? 5000);
+          for (let attempt = 1; ; attempt++) {
+            const result = spawnSync(npm, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+            if (result.stdout) process.stdout.write(result.stdout);
+            if (result.stderr) process.stderr.write(result.stderr);
+            if (result.error) console.error(`npm-retry: ${result.error.message}`);
+            const status = result.status ?? 1;
+            if (status === 0 || result.error) process.exit(status);
+            const output = `${result.stdout}\n${result.stderr}`;
+            const conflict = /TLOG_CREATE_ENTRY_ERROR/.test(output) ||
+              (/\b409\b/.test(output) && /an equivalent entry already exists in the transparency log/i.test(output));
+            if (!conflict) process.exit(status);
+            try {
+              const { name, version } = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
+              if (!name || !version) process.exit(status);
+              const view = spawnSync(npm, ['view', `${name}@${version}`, 'version', ...config], { encoding: 'utf8' });
+              if (view.status === 0 && view.stdout.trim() === version) {
+                console.log(`npm-retry: ${name}@${version} is already published`);
+                process.exit(0);
+              }
+            } catch (error) {
+              console.error(`npm-retry: ${error.message}`);
+              process.exit(status);
+            }
+            if (attempt === 3) process.exit(status);
+            console.error(`npm-retry: transparency-log conflict, attempt ${attempt} of 3`);
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay * attempt);
+          }
+          EOF
+          chmod +x "$shim/git" "$shim/npm"
+          REAL_GIT="$(command -v git)" REAL_NPM="$(command -v npm)" PATH="$shim:$PATH" npx semantic-release
 
       - id: released
         if: ${{ !cancelled() && inputs.attest != '' }}
