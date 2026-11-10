@@ -25,6 +25,14 @@ test('a headed Chrome may fall back to SwiftShader, so WebGL works on a display 
   assert.ok(!commandLine('/p', [], [], false, false, true).includes('--enable-unsafe-swiftshader'));
 });
 
+test('Chrome never asks the macOS keychain, so a test run cannot leave a keychain prompt open', () => {
+  for (const realistic of [false, true]) {
+    const line = commandLine('/p', [], [], realistic, false, true);
+    assert.ok(line.includes('--use-mock-keychain'));
+    assert.ok(line.includes('--password-store=basic'));
+  }
+});
+
 test('the harness exports what a repo launching its own Chrome needs to match it', async () => {
   const harness = await import('@ai-ecoverse/slicc-shared-web/harness');
   assert.equal(harness.headlessByDefault({ CI: 'true' }), false);
