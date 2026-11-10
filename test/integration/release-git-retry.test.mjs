@@ -1,10 +1,21 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
+const repo = fileURLToPath(new URL('../../', import.meta.url));
 const workflow = readFileSync(
   new URL('../../.github/workflows/pipeline.yml', import.meta.url),
   'utf8'
@@ -25,7 +36,7 @@ const runs = lines.flatMap((line, index) => {
 });
 const step = runs.find((run) => run.includes('npx semantic-release'));
 
-function release(t, failures, args) {
+function release(t, failures, args, { probe } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'slicc-release-git-retry-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const calls = join(dir, 'calls');
@@ -34,11 +45,17 @@ function release(t, failures, args) {
     join(dir, 'git'),
     `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nn=$(wc -l < '${calls}')\nif [ "$n" -le ${failures} ]; then echo ' ! [remote rejected] (failed)' >&2; exit 1; fi\necho ok\n`
   );
-  writeFileSync(join(dir, 'npx'), `#!/bin/sh\nexec git ${args}\n`);
+  const probeCmd = probe
+    ? `printf '%s\\n' "$PWD" > '${join(dir, 'probe-pwd')}'\n` +
+      `readlink node_modules/.bin/npm > '${join(dir, 'probe-link')}' 2>/dev/null || true\n` +
+      `readlink '${join(repo, 'node_modules', '.bin', 'npm')}' > '${join(dir, 'probe-repo')}' 2>/dev/null || true\n`
+    : '';
+  writeFileSync(join(dir, 'npx'), `#!/bin/sh\n${probeCmd}exec git ${args}\n`);
   chmodSync(join(dir, 'git'), 0o755);
   chmodSync(join(dir, 'npx'), 0o755);
   const result = spawnSync('bash', ['-e', '-c', step], {
     encoding: 'utf8',
+    cwd: dir,
     env: {
       PATH: `${dir}:${process.env.PATH}`,
       RUNNER_TEMP: dir,
@@ -46,7 +63,7 @@ function release(t, failures, args) {
     },
   });
   const count = readFileSync(calls, 'utf8').split('\n').filter(Boolean).length;
-  return { ...result, count };
+  return { ...result, count, dir };
 }
 
 const notes = 'push https://example.invalid/repo.git refs/notes/semantic-release-v1.2.3';
@@ -85,4 +102,21 @@ test('a command that is not a push or fetch runs once', (t) => {
   const run = release(t, 99, 'tag v1.2.3');
   assert.equal(run.status, 1);
   assert.equal(run.count, 1);
+});
+
+test('the npm shim is installed under RUNNER_TEMP, not the checkout node_modules', (t) => {
+  const repoNpm = join(repo, 'node_modules', '.bin', 'npm');
+  const before = existsSync(repoNpm) ? readlinkSync(repoNpm) : null;
+  const run = release(t, 99, 'tag v1.2.3', { probe: true });
+  assert.equal(run.status, 1, run.stderr);
+  const pwd = readFileSync(join(run.dir, 'probe-pwd'), 'utf8').trim();
+  assert.equal(realpathSync(pwd), realpathSync(run.dir));
+  const link = readFileSync(join(run.dir, 'probe-link'), 'utf8').trim();
+  assert.equal(link, join(run.dir, 'git-retry', 'npm'));
+  const repoLink = existsSync(join(run.dir, 'probe-repo'))
+    ? readFileSync(join(run.dir, 'probe-repo'), 'utf8').trim()
+    : '';
+  assert.notEqual(repoLink, join(run.dir, 'git-retry', 'npm'));
+  const after = existsSync(repoNpm) ? readlinkSync(repoNpm) : null;
+  assert.equal(after, before);
 });
