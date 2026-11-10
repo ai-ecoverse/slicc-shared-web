@@ -269,6 +269,59 @@ test('release gets only the secrets release-secrets names, and attests the attes
   );
 });
 
+test('release attaches the attestation bundle to the release it attested', () => {
+  const release = jobs().release.join('\n');
+  assert.match(release, /subject-path: \$\{\{ inputs\.attest \}\}\n {8}id: attest\n/);
+  assert.match(release, /if: \$\{\{ !cancelled\(\) && steps\.attest\.outcome == 'success' \}\}/);
+  assert.match(release, /BUNDLE: \$\{\{ steps\.attest\.outputs\.bundle-path \}\}/);
+  const script = stepScript('release', 'Attach the attestation bundle');
+  const dir = mkdtempSync(`${tmpdir()}/attest-bundle-`);
+  try {
+    const bin = `${dir}/bin`;
+    mkdirSync(bin);
+    writeFileSync(
+      `${bin}/gh`,
+      '#!/bin/sh\n[ "$1 $2" = "release view" ] && exit "${NO_RELEASE:-0}"\n[ -z "$FAIL" ] || exit 1\necho "$@" >> "$RUNNER_TEMP/gh.log"\n',
+      { mode: 0o755 }
+    );
+    writeFileSync(`${dir}/SHA256SUMS`, 'sums');
+    writeFileSync(`${dir}/attestation.json`, '{"bundle":1}\n');
+    writeFileSync(`${bin}/sleep`, '#!/bin/sh\necho "$1" >> "$RUNNER_TEMP/sleep.log"\n', {
+      mode: 0o755,
+    });
+    const run = (attest, extra = {}, status = 0) => {
+      const env = {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        RUNNER_TEMP: dir,
+        TAG: 'v1.2.3',
+        ATTEST: attest,
+        BUNDLE: `${dir}/attestation.json`,
+        ...extra,
+      };
+      const result = spawnSync('bash', ['-eo', 'pipefail', '-c', script], {
+        env,
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, status, result.stderr);
+      return result.stdout;
+    };
+    assert.match(run(`${dir}/SHA256SUMS`, { NO_RELEASE: '1' }), /v1\.2\.3 has no GitHub release/);
+    assert.equal(existsSync(`${dir}/gh.log`), false);
+    assert.match(run(`${dir}/SHA256SUMS`, { FAIL: '1' }, 1), /upload failed, attempt 3 of 3/);
+    assert.equal(readFileSync(`${dir}/sleep.log`, 'utf8'), '5\n10\n');
+    run(`${dir}/SHA256SUMS`);
+    assert.equal(readFileSync(`${dir}/SHA256SUMS.sigstore.json`, 'utf8'), '{"bundle":1}\n');
+    run(`${dir}/dist/*`);
+    assert.equal(
+      readFileSync(`${dir}/gh.log`, 'utf8'),
+      `release upload v1.2.3 ${dir}/SHA256SUMS.sigstore.json --clobber\nrelease upload v1.2.3 ${dir}/attestation.sigstore.json --clobber\n`
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the README's caller grants every permission the pipeline's jobs ask for", () => {
   const readme = readFileSync(`${root}/README.md`, 'utf8');
   const granted = /\npermissions:\n((?: {2}[a-z-]+: \w+\n)+)/.exec(readme)[1];

@@ -1289,6 +1289,29 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: ${{ inputs.attest }}
+        id: attest
+
+      - name: Attach the attestation bundle to the release
+        if: ${{ !cancelled() && steps.attest.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.released.outputs.tag }}
+          ATTEST: ${{ inputs.attest }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          name=attestation.sigstore.json
+          if [ -f "$ATTEST" ]; then name="$(basename "$ATTEST").sigstore.json"; fi
+          if ! gh release view "$TAG" --json tagName > /dev/null; then
+            echo "attestation bundle: $TAG has no GitHub release, so the bundle isn't attached"
+            exit 0
+          fi
+          cp "$BUNDLE" "$RUNNER_TEMP/$name"
+          for attempt in 1 2 3; do
+            gh release upload "$TAG" "$RUNNER_TEMP/$name" --clobber && exit 0
+            echo "attestation bundle: upload failed, attempt $attempt of 3"
+            [ "$attempt" = 3 ] || sleep $((attempt * 5))
+          done
+          exit 1
 
       - name: After release
         if: inputs.after-release != ''
