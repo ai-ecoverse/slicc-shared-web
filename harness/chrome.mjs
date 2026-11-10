@@ -29,6 +29,8 @@ export const flags = [
   '--no-first-run',
   '--no-default-browser-check',
   '--no-sandbox',
+  '--use-mock-keychain',
+  '--password-store=basic',
   '--disable-extensions',
   '--disable-component-extensions-with-background-pages',
   '--disable-background-timer-throttling',
