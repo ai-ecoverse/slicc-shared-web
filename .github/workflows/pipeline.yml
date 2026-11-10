@@ -1301,11 +1301,15 @@ jobs:
         run: |
           name=attestation.sigstore.json
           if [ -f "$ATTEST" ]; then name="$(basename "$ATTEST").sigstore.json"; fi
+          if ! gh release view "$TAG" --json tagName > /dev/null; then
+            echo "attestation bundle: $TAG has no GitHub release, so the bundle isn't attached"
+            exit 0
+          fi
           cp "$BUNDLE" "$RUNNER_TEMP/$name"
           for attempt in 1 2 3; do
             gh release upload "$TAG" "$RUNNER_TEMP/$name" --clobber && exit 0
             echo "attestation bundle: upload failed, attempt $attempt of 3"
-            sleep $((attempt * 5))
+            [ "$attempt" = 3 ] || sleep $((attempt * 5))
           done
           exit 1
 

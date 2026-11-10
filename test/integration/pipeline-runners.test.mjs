@@ -279,10 +279,17 @@ test('release attaches the attestation bundle to the release it attested', () =>
   try {
     const bin = `${dir}/bin`;
     mkdirSync(bin);
-    writeFileSync(`${bin}/gh`, '#!/bin/sh\necho "$@" >> "$RUNNER_TEMP/gh.log"\n', { mode: 0o755 });
+    writeFileSync(
+      `${bin}/gh`,
+      '#!/bin/sh\n[ "$1 $2" = "release view" ] && exit "${NO_RELEASE:-0}"\n[ -z "$FAIL" ] || exit 1\necho "$@" >> "$RUNNER_TEMP/gh.log"\n',
+      { mode: 0o755 }
+    );
     writeFileSync(`${dir}/SHA256SUMS`, 'sums');
     writeFileSync(`${dir}/attestation.json`, '{"bundle":1}\n');
-    const run = (attest) => {
+    writeFileSync(`${bin}/sleep`, '#!/bin/sh\necho "$1" >> "$RUNNER_TEMP/sleep.log"\n', {
+      mode: 0o755,
+    });
+    const run = (attest, extra = {}, status = 0) => {
       const env = {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
@@ -290,13 +297,19 @@ test('release attaches the attestation bundle to the release it attested', () =>
         TAG: 'v1.2.3',
         ATTEST: attest,
         BUNDLE: `${dir}/attestation.json`,
+        ...extra,
       };
       const result = spawnSync('bash', ['-eo', 'pipefail', '-c', script], {
         env,
         encoding: 'utf8',
       });
-      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.status, status, result.stderr);
+      return result.stdout;
     };
+    assert.match(run(`${dir}/SHA256SUMS`, { NO_RELEASE: '1' }), /v1\.2\.3 has no GitHub release/);
+    assert.equal(existsSync(`${dir}/gh.log`), false);
+    assert.match(run(`${dir}/SHA256SUMS`, { FAIL: '1' }, 1), /upload failed, attempt 3 of 3/);
+    assert.equal(readFileSync(`${dir}/sleep.log`, 'utf8'), '5\n10\n');
     run(`${dir}/SHA256SUMS`);
     assert.equal(readFileSync(`${dir}/SHA256SUMS.sigstore.json`, 'utf8'), '{"bundle":1}\n');
     run(`${dir}/dist/*`);
