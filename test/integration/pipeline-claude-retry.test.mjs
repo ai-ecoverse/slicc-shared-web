@@ -1,92 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { evaluate, job, simulate as run, steps } from './pipeline-steps.mjs';
 
-const root = fileURLToPath(new URL('../..', import.meta.url));
-const text = readFileSync(join(root, '.github/workflows/pipeline.yml'), 'utf8');
 const dirs = [];
 after(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
-
-function job(name) {
-  const start = text.indexOf(`\n  ${name}:\n`);
-  assert.ok(start >= 0, `no ${name} job`);
-  const next = text.slice(start + 1).search(/\n {2}[a-z-]+:\n/);
-  return text.slice(start, next < 0 ? undefined : start + 1 + next);
-}
-
-const field = (lines, key) => {
-  const found = lines.map((line) => new RegExp(`^ {8}${key}: (.+)$`).exec(line)?.[1]).find(Boolean);
-  if (found === undefined) return undefined;
-  return /^'.*'$/.test(found) ? found.slice(1, -1).replace(/''/g, "'") : found;
-};
-
-function block(lines, key) {
-  const at = lines.indexOf(`        ${key}:`);
-  if (at < 0) return {};
-  const map = {};
-  for (const line of lines.slice(at + 1)) {
-    if (line.startsWith('            ')) continue;
-    const entry = /^ {10}([A-Za-z_]+): (.*)$/.exec(line);
-    if (!entry) break;
-    map[entry[1]] = /^'.*'$/.test(entry[2]) ? entry[2].slice(1, -1) : entry[2];
-  }
-  return map;
-}
-
-function folded(lines, key) {
-  const at = lines.indexOf(`          ${key}: >-`);
-  if (at < 0) return undefined;
-  const body = [];
-  for (const line of lines.slice(at + 1)) {
-    if (!line.startsWith('            ')) break;
-    body.push(line.trim());
-  }
-  return body.join(' ');
-}
-
-function steps(jobName) {
-  const anchors = {};
-  return job(jobName)
-    .split(/\n(?= {6}- )/)
-    .slice(1)
-    .map((raw) => {
-      const lines = raw.replace(/^ {6}- /, '        ').split('\n');
-      let run;
-      const at = lines.findIndex((line) => /^ {8}run: (&[\w-]+ )?\|$/.test(line));
-      if (at >= 0) {
-        const body = [];
-        for (const line of lines.slice(at + 1)) {
-          if (line.trim() && !line.startsWith('          ')) break;
-          body.push(line.slice(10));
-        }
-        run = body.join('\n').trimEnd();
-        const anchor = /run: &([\w-]+) \|/.exec(lines[at])?.[1];
-        if (anchor) anchors[anchor] = run;
-      } else {
-        const inline = field(lines, 'run');
-        run = inline?.startsWith('*') ? anchors[inline.slice(1)] : inline;
-      }
-      return {
-        raw,
-        lines,
-        id: field(lines, 'id'),
-        name: field(lines, 'name'),
-        if: field(lines, 'if'),
-        uses: field(lines, 'uses'),
-        continueOnError: field(lines, 'continue-on-error') === 'true',
-        env: block(lines, 'env'),
-        with: block(lines, 'with'),
-        claudeArgs: folded(lines, 'claude_args'),
-        run,
-      };
-    });
-}
 
 const reviewer = steps('reviewer');
 const byId = (id) => {
@@ -94,57 +17,8 @@ const byId = (id) => {
   assert.ok(found, `no step with id ${id} in reviewer`);
   return found;
 };
-const outcomeSteps = () => reviewer.filter((step) => step.env.ATTEMPT);
-
-function evaluate(expression, context) {
-  const source = expression.replace(/^\$\{\{\s*|\s*\}\}$/g, '');
-  const status = /\b(always|cancelled|success|failure)\(\)/.test(source);
-  const lookup = (path) => {
-    const value = path.split('.').reduce((at, key) => at?.[key], context);
-    return value ?? '';
-  };
-  const js = source.replace(
-    /'((?:[^']|'')*)'|\b(always|cancelled|success|failure)\(\)|\b((?:matrix|steps|env|vars)(?:\.[A-Za-z_][\w-]*)+)|(!=|==)/g,
-    (_, string, call, path, op) => {
-      if (string !== undefined) return JSON.stringify(string.replace(/''/g, "'"));
-      if (call === 'always') return 'true';
-      if (call === 'cancelled') return 'false';
-      if (call === 'success') return String(!context.failed);
-      if (call === 'failure') return String(context.failed);
-      if (path) return JSON.stringify(lookup(path));
-      return `${op}=`;
-    }
-  );
-  const value = Function(`return (${js});`)();
-  return status ? value : !context.failed && value;
-}
-
-function simulate(agent, attempts) {
-  const context = { matrix: { agent }, steps: {}, failed: false };
-  const ran = [];
-  let findings;
-  const start = reviewer.findIndex((step) => step.id === 'claude');
-  for (const step of reviewer.slice(start)) {
-    const label = step.id ?? step.name ?? step.uses ?? step.run?.slice(0, 40);
-    const go = step.if === undefined ? !context.failed : evaluate(step.if, context);
-    if (!go) {
-      if (step.id) context.steps[step.id] = { outcome: 'skipped', outputs: {} };
-      continue;
-    }
-    ran.push(label);
-    let outcome = 'success';
-    let outputs = {};
-    if (step.id === 'claude' || step.id === 'claude-retry') {
-      const verdict = attempts.shift();
-      outcome = verdict ? 'success' : 'failure';
-      if (verdict) outputs = { structured_output: JSON.stringify({ verdict }) };
-    }
-    if (step.env.FINDINGS) findings = evaluate(step.env.FINDINGS, context);
-    if (step.id) context.steps[step.id] = { outcome, outputs };
-    if (outcome === 'failure' && !step.continueOnError) context.failed = true;
-  }
-  return { ran, findings, failed: context.failed, left: attempts.length };
-}
+const outcomeSteps = () => reviewer.filter((step) => step.name?.startsWith('Claude'));
+const simulate = (agent, attempts) => run(reviewer, agent, attempts);
 
 function outcome(transcript, model = 'global.anthropic.claude-opus-5-5') {
   const dir = mkdtempSync(join(tmpdir(), 'slicc-claude-outcome-'));
@@ -314,7 +188,9 @@ test('each attempt gets the same outcome step, with its own number and model, an
       { ATTEMPT: '2', MODEL: '${{ env.CLAUDE_FALLBACK_MODEL }}' },
     ]
   );
-  const order = reviewer.map((step) => step.id ?? step.env.ATTEMPT);
+  const order = reviewer.map((step) =>
+    step.name?.startsWith('Claude') ? step.env.ATTEMPT : step.id
+  );
   assert.deepEqual(
     order.filter((id) => ['claude', '1', 'claude-retry', '2'].includes(id)),
     ['claude', '1', 'claude-retry', '2']
@@ -346,7 +222,9 @@ test('the retry runs the same action and arguments on the fallback model, and on
   assert.equal(claude.continueOnError, true);
   assert.equal(retry.continueOnError, false);
   assert.deepEqual(
-    reviewer.filter((step) => step.continueOnError).map((step) => step.id),
+    reviewer
+      .filter((step) => step.continueOnError && step.id.startsWith('claude'))
+      .map((step) => step.id),
     ['claude']
   );
 });
@@ -381,9 +259,9 @@ test('the retry runs only when the first attempt has no verdict, and findings.js
   assert.equal(none.failed, true);
   assert.ok(none.ran.some((label) => label.startsWith('actions/upload-artifact@')));
 
-  const codex = simulate('codex', []);
+  const codex = simulate('codex', ['approved']);
   assert.ok(!codex.ran.some((label) => /^(claude|Claude)/.test(label)));
-  assert.equal(codex.findings, undefined);
+  assert.equal(JSON.parse(codex.findings).verdict, 'approved');
   assert.equal(codex.failed, false);
 });
 
