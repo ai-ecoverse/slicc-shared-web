@@ -754,6 +754,7 @@ jobs:
     env:
       CLAUDE_MODEL: ${{ vars.CERT_BEDROCK_MODEL || 'global.anthropic.claude-opus-5-5' }}
       CLAUDE_FALLBACK_MODEL: ${{ vars.CERT_BEDROCK_FALLBACK_MODEL || 'global.anthropic.claude-sonnet-5-5' }}
+      CODEX_MODEL: ${{ vars.CODEX_BEDROCK_MODEL || 'global.openai.gpt-6.1-sol' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -976,20 +977,76 @@ jobs:
           echo 'model_provider = "amazon-bedrock-runtime"' > "$RUNNER_TEMP/codex-home/config.toml"
           echo '{"port":0}' > "$RUNNER_TEMP/codex-home/$GITHUB_RUN_ID.json"
 
-      - if: matrix.agent == 'codex'
+      - id: codex
+        if: matrix.agent == 'codex'
+        continue-on-error: true
         uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675
         env:
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ vars.CERT_AWS_REGION || 'us-west-2' }}
         with:
           prompt-file: ${{ runner.temp }}/review/prompt.txt
-          output-file: ${{ runner.temp }}/review/findings.json
           output-schema: ${{ env.FINDINGS_SCHEMA }}
           codex-home: ${{ runner.temp }}/codex-home
-          model: ${{ vars.CODEX_BEDROCK_MODEL || 'global.openai.gpt-6.1-sol' }}
+          model: ${{ env.CODEX_MODEL }}
           sandbox: danger-full-access
           safety-strategy: ${{ runner.environment == 'github-hosted' && 'drop-sudo' || 'unsafe' }}
           allow-bot-users: renovate
+
+      - name: Codex outcome
+        if: matrix.agent == 'codex' && steps.codex.outcome != 'skipped'
+        env:
+          ATTEMPT: '1'
+          MODEL: ${{ env.CODEX_MODEL }}
+          OUTCOME: ${{ steps.codex.outcome }}
+          HAS_FINDINGS: ${{ steps.codex.outputs.final-message != '' }}
+        run: &codex-outcome |
+          sessions=$RUNNER_TEMP/codex-home/sessions
+          file=$(find "$sessions" -type f -name 'rollout-*.jsonl' 2> /dev/null | sort | tail -n 1) || file=
+          if [ -z "$file" ]; then
+            echo "codex attempt $ATTEMPT, $MODEL: outcome=$OUTCOME findings=$HAS_FINDINGS, no session rollout"
+            exit 0
+          fi
+          line=$(jq -rRn '
+            def word: if type == "number" or type == "boolean" then tostring elif type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$") then . elif . == null then "none" else "?" end;
+            [inputs | fromjson? | objects | select(.type == "event_msg") | .payload | objects] as $all
+            | ([$all[] | select(.type == "task_complete" or .type == "turn_aborted")] | last // {}) as $end
+            | ($end.error.message | if type == "string" then (fromjson? // {}) else {} end | if type == "object" then .error else null end | if type == "object" then . else {} end) as $api
+            | ($end.error.codex_error_info | if type == "object" then (keys | first) else . end) as $info
+            | ([$all[] | select(.type == "token_count") | .info.total_token_usage.total_tokens] | last) as $tokens
+            | "turn_end=\($end.type | word) error_type=\($api.type | word) error_code=\($api.code | word) codex_error=\($info | word) tokens=\($tokens | word)"
+          ' < "$file" 2> /dev/null) || line='session rollout is not JSON lines'
+          rm -rf "$sessions"
+          echo "codex attempt $ATTEMPT, $MODEL: outcome=$OUTCOME findings=$HAS_FINDINGS $line"
+
+      - id: codex-retry
+        if: matrix.agent == 'codex' && (steps.codex.outcome == 'failure' || steps.codex.outputs.final-message == '')
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.CERT_AWS_REGION || 'us-west-2' }}
+        with:
+          prompt-file: ${{ runner.temp }}/review/prompt.txt
+          output-schema: ${{ env.FINDINGS_SCHEMA }}
+          codex-home: ${{ runner.temp }}/codex-home
+          model: ${{ env.CODEX_MODEL }}
+          sandbox: danger-full-access
+          safety-strategy: ${{ runner.environment == 'github-hosted' && 'drop-sudo' || 'unsafe' }}
+          allow-bot-users: renovate
+
+      - name: Codex retry outcome
+        if: '!cancelled() && steps.codex-retry.outcome != ''skipped'''
+        env:
+          ATTEMPT: '2'
+          MODEL: ${{ env.CODEX_MODEL }}
+          OUTCOME: ${{ steps.codex-retry.outcome }}
+          HAS_FINDINGS: ${{ steps.codex-retry.outputs.final-message != '' }}
+        run: *codex-outcome
+
+      - if: matrix.agent == 'codex'
+        env:
+          FINDINGS: ${{ steps.codex.outputs.final-message || steps.codex-retry.outputs.final-message }}
+        run: printf '%s' "$FINDINGS" > "$RUNNER_TEMP/review/findings.json"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
