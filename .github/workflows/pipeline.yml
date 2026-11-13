@@ -751,6 +751,9 @@ jobs:
       fail-fast: false
       matrix:
         agent: [claude, codex]
+    env:
+      CLAUDE_MODEL: ${{ vars.CERT_BEDROCK_MODEL || 'global.anthropic.claude-opus-5-5' }}
+      CLAUDE_FALLBACK_MODEL: ${{ vars.CERT_BEDROCK_FALLBACK_MODEL || 'global.anthropic.claude-sonnet-5-5' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -894,6 +897,7 @@ jobs:
 
       - id: claude
         if: matrix.agent == 'claude'
+        continue-on-error: true
         uses: anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6
         env:
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
@@ -905,15 +909,64 @@ jobs:
           github_token: ${{ github.token }}
           allowed_bots: renovate[bot]
           claude_args: >-
-            --model ${{ vars.CERT_BEDROCK_MODEL || 'global.anthropic.claude-opus-5-5' }}
+            --model ${{ env.CLAUDE_MODEL }}
             --add-dir ${{ runner.temp }}/base
             --add-dir ${{ runner.temp }}/review
             --allowedTools Bash,Read,Glob,Grep,WebFetch
             --json-schema '${{ env.FINDINGS_SCHEMA }}'
 
+      - name: Claude outcome
+        if: matrix.agent == 'claude' && steps.claude.outcome != 'skipped'
+        env:
+          ATTEMPT: '1'
+          MODEL: ${{ env.CLAUDE_MODEL }}
+        run: &claude-outcome |
+          file=$RUNNER_TEMP/claude-execution-output.json
+          if [ ! -f "$file" ]; then
+            echo "claude attempt $ATTEMPT, $MODEL: no claude-execution-output.json"
+            exit 0
+          fi
+          line=$(jq -r '
+            def word: if type == "number" or type == "boolean" then tostring elif type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$") then . elif . == null then "none" else "?" end;
+            def list: if length == 0 then "none" else unique | join(",") end;
+            [.[]? | objects] as $all
+            | ([$all[] | select(.type == "result")] | last // {}) as $result
+            | ([$all[] | select(.type == "system" and ((.subtype | word) | startswith("model_refusal"))) | "\(.subtype | word):\(.api_refusal_category | word)"] | list) as $refusal
+            | ([$all[] | select(.type == "assistant" and .error != null) | .error | word] | list) as $error
+            | "subtype=\($result.subtype | word) is_error=\($result.is_error | word) stop_reason=\($result.stop_reason | word) num_turns=\($result.num_turns | word) total_cost_usd=\($result.total_cost_usd | word) terminal_reason=\($result.terminal_reason | word) api_error_status=\($result.api_error_status | word) refusal=\($refusal) error=\($error)"
+          ' "$file" 2> /dev/null) || line='claude-execution-output.json is not JSON'
+          rm -f "$file"
+          echo "claude attempt $ATTEMPT, $MODEL: $line"
+
+      - id: claude-retry
+        if: matrix.agent == 'claude' && (steps.claude.outcome == 'failure' || steps.claude.outputs.structured_output == '')
+        uses: anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.CERT_AWS_REGION || 'us-west-2' }}
+        with:
+          prompt: Follow the instructions in ${{ runner.temp }}/review/prompt.txt.
+          use_bedrock: 'true'
+          path_to_claude_code_executable: ${{ steps.claude-code.outputs.path }}
+          github_token: ${{ github.token }}
+          allowed_bots: renovate[bot]
+          claude_args: >-
+            --model ${{ env.CLAUDE_FALLBACK_MODEL }}
+            --add-dir ${{ runner.temp }}/base
+            --add-dir ${{ runner.temp }}/review
+            --allowedTools Bash,Read,Glob,Grep,WebFetch
+            --json-schema '${{ env.FINDINGS_SCHEMA }}'
+
+      - name: Claude retry outcome
+        if: '!cancelled() && steps.claude-retry.outcome != ''skipped'''
+        env:
+          ATTEMPT: '2'
+          MODEL: ${{ env.CLAUDE_FALLBACK_MODEL }}
+        run: *claude-outcome
+
       - if: matrix.agent == 'claude'
         env:
-          FINDINGS: ${{ steps.claude.outputs.structured_output }}
+          FINDINGS: ${{ steps.claude.outputs.structured_output || steps.claude-retry.outputs.structured_output }}
         run: printf '%s' "$FINDINGS" > "$RUNNER_TEMP/review/findings.json"
 
       - if: matrix.agent == 'codex'
