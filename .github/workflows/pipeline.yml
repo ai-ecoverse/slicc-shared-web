@@ -45,6 +45,9 @@ on:
       review-renovate:
         type: string
         default: ''
+      renovate-bots:
+        type: string
+        default: ''
       node-options:
         type: string
         default: ''
@@ -110,6 +113,8 @@ jobs:
       shards: ${{ steps.shards.outputs.shards }}
       total: ${{ steps.shards.outputs.total }}
       review: ${{ steps.review.outputs.review }}
+      claude-bots: ${{ steps.bots.outputs.claude }}
+      codex-bots: ${{ steps.bots.outputs.codex }}
       bedrock: ${{ steps.bedrock.outputs.bedrock }}
       split: ${{ steps.split.outputs.split }}
       files: ${{ steps.split.outputs.files }}
@@ -247,6 +252,24 @@ jobs:
           console.log(`files=${JSON.stringify(files)}`);
           EOF
 
+      - id: bots
+        env:
+          BOTS: ${{ inputs.renovate-bots }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from 'node:fs';
+          const entries = process.env.BOTS.split(/[\n,]/).map((bot) => bot.trim()).filter(Boolean);
+          const bad = entries.filter((bot) => !/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(bot.replace(/\[bot\]$/, '')));
+          if (bad.length) {
+            console.log(`::error title=renovate-bots::${bad.map((bot) => JSON.stringify(bot)).join(', ')} is not a bot login: list each GitHub App by its login, such as homescoop-renovate-refresh, with no wildcards`);
+            process.exit(1);
+          }
+          const bots = [...new Set(entries.map((bot) => bot.replace(/\[bot\]$/, '').toLowerCase()))].filter((bot) => bot !== 'renovate');
+          const lines = [`bots=${bots.join(',')}`, `claude=${['renovate', ...bots].map((bot) => `${bot}[bot]`).join(',')}`, `codex=${['renovate', ...bots].join(',')}`];
+          console.log(lines.join('\n'));
+          appendFileSync(process.env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);
+          EOF
+
       - id: review
         env:
           EVENT: ${{ github.event_name }}
@@ -254,13 +277,15 @@ jobs:
           AUTHOR: ${{ github.event.pull_request.user.login }}
           SENDER: ${{ github.event.sender.login }}
           RENOVATE_GROUPS: ${{ inputs.review-renovate }}
+          RENOVATE_BOTS: ${{ steps.bots.outputs.bots }}
         run: |
           node --input-type=module <<'EOF' | tee -a "$GITHUB_OUTPUT"
           import { matchesGlob } from 'node:path';
-          const { EVENT, BRANCH, AUTHOR, SENDER, RENOVATE_GROUPS } = process.env;
+          const { EVENT, BRANCH, AUTHOR, SENDER, RENOVATE_GROUPS, RENOVATE_BOTS } = process.env;
           const slug = BRANCH.replace(/^renovate\//, '').replace(/^major-/, '');
           const groups = RENOVATE_GROUPS.split('\n').map((group) => group.trim()).filter(Boolean);
-          const renovate = AUTHOR === 'renovate[bot]' && SENDER === 'renovate[bot]' && BRANCH.startsWith('renovate/');
+          const senders = ['renovate[bot]', ...RENOVATE_BOTS.split(',').filter(Boolean).map((bot) => `${bot}[bot]`)];
+          const renovate = AUTHOR === 'renovate[bot]' && senders.includes(SENDER.toLowerCase()) && BRANCH.startsWith('renovate/');
           const review = EVENT === 'pull_request' && (!renovate || groups.some((group) => matchesGlob(slug, group)));
           console.log(`review=${review}`);
           EOF
@@ -908,7 +933,7 @@ jobs:
           use_bedrock: 'true'
           path_to_claude_code_executable: ${{ steps.claude-code.outputs.path }}
           github_token: ${{ github.token }}
-          allowed_bots: renovate[bot]
+          allowed_bots: ${{ needs.lint.outputs.claude-bots }}
           claude_args: >-
             --model ${{ env.CLAUDE_MODEL }}
             --add-dir ${{ runner.temp }}/base
@@ -950,7 +975,7 @@ jobs:
           use_bedrock: 'true'
           path_to_claude_code_executable: ${{ steps.claude-code.outputs.path }}
           github_token: ${{ github.token }}
-          allowed_bots: renovate[bot]
+          allowed_bots: ${{ needs.lint.outputs.claude-bots }}
           claude_args: >-
             --model ${{ env.CLAUDE_FALLBACK_MODEL }}
             --add-dir ${{ runner.temp }}/base
@@ -991,7 +1016,7 @@ jobs:
           model: ${{ env.CODEX_MODEL }}
           sandbox: danger-full-access
           safety-strategy: ${{ runner.environment == 'github-hosted' && 'drop-sudo' || 'unsafe' }}
-          allow-bot-users: renovate
+          allow-bot-users: ${{ needs.lint.outputs.codex-bots }}
 
       - name: Codex outcome
         if: matrix.agent == 'codex' && steps.codex.outcome != 'skipped'
@@ -1032,7 +1057,7 @@ jobs:
           model: ${{ env.CODEX_MODEL }}
           sandbox: danger-full-access
           safety-strategy: ${{ runner.environment == 'github-hosted' && 'drop-sudo' || 'unsafe' }}
-          allow-bot-users: renovate
+          allow-bot-users: ${{ needs.lint.outputs.codex-bots }}
 
       - name: Codex retry outcome
         if: '!cancelled() && steps.codex-retry.outcome != ''skipped'''

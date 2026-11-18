@@ -118,7 +118,7 @@ Each reviewer answers with `findings.json`, held to one JSON schema:
 
 ### Which pull requests get a review
 
-Every pull request does, except Renovate's: one opened by `renovate[bot]` from a `renovate/` branch, on an event `renovate[bot]` caused (a push by anyone else onto that branch gets a review). A Renovate branch is `renovate/<group slug>`, or `renovate/major-<group slug>` for a major, or `renovate/<dependency>-<version>` outside a group. Its pull request gets a review only when the slug, without `major-`, matches one of the globs in `review-renovate`, one per line:
+Every pull request does, except Renovate's: one opened by `renovate[bot]` from a `renovate/` branch, on an event `renovate[bot]`, or a bot listed in `renovate-bots`, caused (a push by anyone else onto that branch gets a review). A Renovate branch is `renovate/<group slug>`, or `renovate/major-<group slug>` for a major, or `renovate/<dependency>-<version>` outside a group. Its pull request gets a review only when the slug, without `major-`, matches one of the globs in `review-renovate`, one per line:
 
 ```yaml
     with:
@@ -128,6 +128,8 @@ Every pull request does, except Renovate's: one opened by `renovate[bot]` from a
 ```
 
 `*` reviews every Renovate pull request. With the default, none, a Renovate pull request is held only by its integration tests.
+
+A repo whose own GitHub App pushes onto Renovate's branches (a refresh commit, say) names it in `renovate-bots`, by login, one per line or comma-separated, with or without `[bot]`: `homescoop-renovate-refresh`. A push by a listed bot onto a `renovate/` branch of a pull request `renovate[bot]` opened counts as Renovate's own, so it skips review exactly like Renovate's pushes unless the group matches `review-renovate`, and both reviewers accept the bot as the actor when the group does get a review. A push by it anywhere else gets a review as usual. List only a bot the repo controls. An entry that isn't a plain login (letters, digits and hyphens), `*` or any other wildcard included, fails `lint`.
 
 The commands in `lint`, `test`, `deploy`, `review-browser` and `after-release` run with `bash -eo pipefail -c`, so a multi-line command stops at its first failing line, a failure inside a pipe included.
 
@@ -150,6 +152,7 @@ The commands in `lint`, `test`, `deploy`, `review-browser` and `after-release` r
 | `review-timeout-minutes` | `60` | how long each reviewer may take |
 | `review-screenshots` | `30` | the most screenshots a reviewer may attach |
 | `review-renovate` | none | globs of Renovate group slugs whose pull requests get a review |
+| `renovate-bots` | none | logins of bots whose pushes onto Renovate's branches count as Renovate's, [above](#which-pull-requests-get-a-review) |
 | `node-options` | none | node flags added to the test step's `NODE_OPTIONS`, such as `--max-old-space-size=8192` |
 | `require-tests` | `true` | `integration` fails when no test ran |
 | `flaky-retry` | `0` | the most failing files a shard reruns once, [flaky tests](#pipeline); `0` reruns and reports nothing |
