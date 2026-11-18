@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { getPriority, setPriority, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { env as inherited } from 'node:process';
 import { promisify } from 'node:util';
@@ -9,7 +9,7 @@ import { executablePath, explicit } from './browser.mjs';
 import { cdn } from './cdn.mjs';
 import { CRASHED, connect, pipe, SEND_TIMEOUT } from './cdp.mjs';
 import { screenFor } from './display.mjs';
-import { crashpad } from './dumps.mjs';
+import { crashpad, DUMPS } from './dumps.mjs';
 import {
   builtinWanted,
   exclusive,
@@ -51,6 +51,23 @@ export function headlessByDefault(env = inherited) {
   if (env.SLICC_HEADLESS === '1') return true;
   if (env.SLICC_HEADLESS === '0') return false;
   return !env.CI || env.CI === 'false' || env.CI === '0';
+}
+
+export const NICE = 10;
+
+export function niceByDefault(env = inherited) {
+  if (env.SLICC_NICE === '1') return true;
+  if (env.SLICC_NICE === '0') return false;
+  return !env.CI || env.CI === 'false' || env.CI === '0';
+}
+
+export function lower(pid, nice = NICE) {
+  try {
+    setPriority(pid, Math.max(getPriority(pid), nice));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export const modeFlags = (headless) =>
@@ -106,7 +123,8 @@ export async function start(
   profile,
   args = commandLine(profile),
   executable = undefined,
-  env = inherited
+  env = inherited,
+  nice = false
 ) {
   const path = executable ?? (await executablePath({ env }));
   const child = spawn(path, args, {
@@ -114,6 +132,7 @@ export async function start(
     detached: true,
     stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
   });
+  if (nice && child.pid > 0) lower(child.pid);
   const stderr = lines(child.stderr);
   const drained = new Promise((resolve) => child.stderr.once('close', resolve));
   const exited = new Promise((resolve) => {
@@ -239,16 +258,18 @@ export async function commandLines() {
 export async function prune(dir = tmpdir(), grace = GRACE) {
   const lines = await commandLines().catch(ignore);
   const used = (path) => lines.some((line) => line.includes(`--user-data-dir=${path} `));
+  const held = (name) => lines.some((line) => line.includes(`${name} `));
+  const busy = (name, path) => (name.startsWith(PREFIX) ? used(path) : held(name));
   const names = await readdir(dir).catch(() => []);
   const now = Date.now();
   const removing = names
-    .filter((name) => name.startsWith(PREFIX))
+    .filter((name) => name.startsWith(PREFIX) || name.startsWith(DUMPS))
     .map(async (name) => {
       const path = join(dir, name);
       const info = await lstat(path).catch(ignore);
       if (!info?.isDirectory()) return;
       const age = now - info.mtimeMs;
-      const orphaned = lines !== null && age > grace && !used(path);
+      const orphaned = lines !== null && age > grace && !busy(name, path);
       if (age > DAY || orphaned) await rm(path, { recursive: true, force: true }).catch(ignore);
     });
   await Promise.all(removing);
@@ -332,6 +353,7 @@ export async function launch({
   profile = inherited.SLICC_PROFILE === '1',
   realistic = false,
   headless = headlessByDefault(),
+  nice = niceByDefault(),
   persistent = false,
   executable,
 } = {}) {
@@ -354,7 +376,8 @@ export async function launch({
     userData,
     commandLine(userData, loaded, args, realistic, builtin, headless),
     browser,
-    screen.env
+    screen.env,
+    nice
   ).catch((error) => scrap(error, screen.close));
   const untrack = track(child, [userData, dumps.dir], [screen.child].filter(Boolean));
   const cdp = await connect(pipe(child.stdio[3], child.stdio[4]), {

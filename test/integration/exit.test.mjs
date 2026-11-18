@@ -84,6 +84,28 @@ test('SIGKILL before close() stops chrome, and the next launch removes its profi
   assert.ok(existsSync(profile), 'profile survives SIGKILL');
   await prune(dir, 0);
   assert.ok(!existsSync(profile), 'prune removes the profile');
+  assert.deepEqual(await leftovers(dir), [], 'prune removes the crash dump directory too');
+});
+
+test('prune keeps a crash dump directory a running crashpad uses', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'slicc exit '));
+  dirs.push(dir);
+  const dumps = await mkdtemp(join(dir, 'slicc-crashes-'));
+  const stale = await mkdtemp(join(dir, 'slicc-crashes-'));
+  const holder = spawn(process.execPath, [
+    '-e',
+    'setInterval(() => {}, 60000)',
+    '--',
+    `--database=${dumps}`,
+    '--annotation=ptype=crashpad-handler',
+  ]);
+  try {
+    await prune(dir, 0);
+    assert.ok(existsSync(dumps), 'directory in use is kept');
+    assert.ok(!existsSync(stale), 'directory nobody uses is removed');
+  } finally {
+    holder.kill('SIGKILL');
+  }
 });
 
 test('prune keeps a profile a running chrome uses, even in a path with spaces', async () => {
