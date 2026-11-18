@@ -5,13 +5,14 @@ import { env } from 'node:process';
 import { sleep } from './util.mjs';
 
 export const DUMP_WAIT = 10000;
+export const DUMPS = 'slicc-crashes-';
 
 async function list(dir, sub) {
   return (await readdir(join(dir, sub)).catch(() => [])).map((file) => join(sub, file));
 }
 
 export async function crashpad() {
-  const dir = await mkdtemp(join(tmpdir(), 'slicc-crashes-'));
+  const dir = await mkdtemp(join(tmpdir(), DUMPS));
   const kept = new Set();
   const scan = async () => {
     const [pending, completed, writing] = await Promise.all(
