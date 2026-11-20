@@ -1,0 +1,158 @@
+name: Codex fallback probe
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.CERT_AWS_REGION || 'us-west-2' }}
+  FINDINGS_SCHEMA: >-
+    {"type":"object","additionalProperties":false,"required":["verdict","summary","comments","issues"],"properties":{"verdict":{"type":"string","enum":["approved","denied"]},"summary":{"type":"string"},"comments":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"type":"string"},"line":{"type":"integer"},"body":{"type":"string"}}}},"issues":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["repo","title","body","security"],"properties":{"repo":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"security":{"type":"boolean"}}}}}}
+
+jobs:
+  models:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: cloud-run-job
+    timeout-minutes: 5
+    steps:
+      - name: OpenAI models and inference profiles this key can see
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+        run: |
+          base="https://bedrock.$AWS_REGION.amazonaws.com"
+          page=$RUNNER_TEMP/page.json
+          get() {
+            status=$(curl -sS -o "$page" -w '%{http_code}' -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" "$1") || status=curl-failed
+            echo "GET ${1#"$base"}: HTTP $status"
+            if [ "$status" != 200 ]; then
+              jq -r '(.message // .Message // "no message") | tostring | gsub("arn:[^ ]*"; "arn:…") | gsub("[0-9]{12}"; "…") | .[0:300]' "$page" 2> /dev/null || echo "error body is not JSON"
+              return 1
+            fi
+          }
+          echo "region $AWS_REGION"
+          if get "$base/foundation-models?byProvider=OpenAI"; then
+            jq -r '.modelSummaries[] | select(.modelId | test("openai|gpt"; "i")) | "foundation-model \(.modelId) lifecycle=\(.modelLifecycle.status // "?") inference=\((.inferenceTypesSupported // []) | join(","))"' "$page" | sort
+          fi
+          if get "$base/foundation-models"; then
+            echo "all foundation models: $(jq '.modelSummaries | length' "$page"), OpenAI or gpt: $(jq '[.modelSummaries[] | select(.modelId | test("openai|gpt"; "i"))] | length' "$page")"
+          fi
+          next=
+          for n in 1 2 3 4 5 6 7 8 9 10; do
+            url="$base/inference-profiles?maxResults=1000&typeEquals=SYSTEM_DEFINED"
+            [ -z "$next" ] || url="$url&nextToken=$(jq -rn --arg t "$next" '$t | @uri')"
+            get "$url" || break
+            jq -r '.inferenceProfileSummaries[] | select(.inferenceProfileId | test("openai|gpt"; "i")) | "inference-profile \(.inferenceProfileId) status=\(.status // "?") routes=\([.models[]?.modelArn | capture("^arn:aws[^:]*:bedrock:(?<region>[^:]*):[^:]*:foundation-model/(?<model>.*)$") | "\(.region)/\(.model)"] | unique | join(","))"' "$page" | sort
+            next=$(jq -r '.nextToken // empty' "$page")
+            [ -n "$next" ] || break
+            echo "page $n had a next page"
+          done
+
+  probe:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: cloud-run-job
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - global.openai.gpt-6.1-sol
+          - global.openai.gpt-6-sol
+          - global.openai.gpt-6.1-terra
+          - us.openai.gpt-6.1-sol
+          - global.openai.gpt-6-astra
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+
+      - name: Codex on Bedrock
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-home"
+          echo 'model_provider = "amazon-bedrock-runtime"' > "$RUNNER_TEMP/codex-home/config.toml"
+          echo '{"port":0}' > "$RUNNER_TEMP/codex-home/$GITHUB_RUN_ID.json"
+
+      - id: codex
+        continue-on-error: true
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+        with:
+          prompt: 'This is a connectivity probe. Do not read files or run any command. Reply with exactly this JSON object, which matches the output schema you were given: {"verdict":"approved","summary":"probe","comments":[],"issues":[]}'
+          output-schema: ${{ env.FINDINGS_SCHEMA }}
+          codex-home: ${{ runner.temp }}/codex-home
+          model: ${{ matrix.model }}
+          sandbox: danger-full-access
+          safety-strategy: ${{ runner.environment == 'github-hosted' && 'drop-sudo' || 'unsafe' }}
+
+      - name: Result
+        if: always()
+        env:
+          MODEL: ${{ matrix.model }}
+          OUTCOME: ${{ steps.codex.outcome }}
+          MESSAGE: ${{ steps.codex.outputs.final-message }}
+        run: |
+          message=no
+          [ -z "$MESSAGE" ] || message=yes
+          schema=$(node -e '
+            const s = JSON.parse(process.env.FINDINGS_SCHEMA);
+            let v;
+            try { v = JSON.parse(process.env.MESSAGE); } catch { console.log("not-json"); process.exit(); }
+            const ok = (schema, value) => {
+              if (schema.type === "object") {
+                if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+                if (schema.additionalProperties === false && Object.keys(value).some((k) => !(k in schema.properties))) return false;
+                if ((schema.required || []).some((k) => !(k in value))) return false;
+                return Object.entries(value).every(([k, x]) => ok(schema.properties[k], x));
+              }
+              if (schema.type === "array") return Array.isArray(value) && value.every((x) => ok(schema.items, x));
+              if (schema.type === "string") return typeof value === "string" && (!schema.enum || schema.enum.includes(value));
+              if (schema.type === "integer") return Number.isInteger(value);
+              if (schema.type === "boolean") return typeof value === "boolean";
+              return false;
+            };
+            console.log(ok(s, v) ? "valid" : "invalid");
+          ')
+          sessions=$RUNNER_TEMP/codex-home/sessions
+          file=$(find "$sessions" -type f -name 'rollout-*.jsonl' 2> /dev/null | sort | tail -n 1) || file=
+          facts="no session rollout"
+          if [ -n "$file" ]; then
+            facts=$(jq -rRn '
+              def word: if type == "number" or type == "boolean" then tostring elif type == "string" and test("^[A-Za-z0-9_.:-]{1,64}$") then . elif . == null then "none" else "?" end;
+              [inputs | fromjson? | objects | select(.type == "event_msg") | .payload | objects] as $all
+              | ([$all[] | select(.type == "task_complete" or .type == "turn_aborted")] | last // {}) as $end
+              | ($end.error.message | if type == "string" then (fromjson? // {}) else {} end | if type == "object" then .error else null end | if type == "object" then . else {} end) as $api
+              | ($end.error.codex_error_info | if type == "object" then (keys | first) else . end) as $info
+              | ([$all[] | select(.type == "token_count") | .info.total_token_usage.total_tokens] | last) as $tokens
+              | "turn_end=\($end.type | word) error_type=\($api.type | word) error_code=\($api.code | word) codex_error=\($info | word) tokens=\($tokens | word)"
+            ' < "$file" 2> /dev/null) || facts='session rollout is not JSON lines'
+          fi
+          rm -rf "$sessions"
+          line="probe $MODEL: outcome=$OUTCOME final_message=$message schema=$schema $facts"
+          echo "$line"
+          echo "$line" > "$RUNNER_TEMP/result.txt"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: probe-${{ matrix.model }}
+          path: ${{ runner.temp }}/result.txt
+          if-no-files-found: ignore
+
+  results:
+    needs: probe
+    if: always() && needs.probe.result != 'skipped'
+    runs-on: cloud-run-job
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: probe-*
+          path: results
+      - run: cat results/*/result.txt | sort
