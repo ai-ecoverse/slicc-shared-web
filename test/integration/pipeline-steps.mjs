@@ -13,6 +13,17 @@ export function job(name) {
   return text.slice(start, next < 0 ? undefined : start + 1 + next);
 }
 
+export function jobEnv(name) {
+  const body = /\n {4}env:\n((?: {6}[A-Z_]+: .*\n)+)/.exec(job(name))?.[1] ?? '';
+  return Object.fromEntries(
+    body
+      .trimEnd()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => /^ {6}([A-Z_]+): (.*)$/.exec(line).slice(1))
+  );
+}
+
 const field = (lines, key) => {
   const found = lines.map((line) => new RegExp(`^ {8}${key}: (.+)$`).exec(line)?.[1]).find(Boolean);
   if (found === undefined) return undefined;
@@ -114,10 +125,16 @@ const agents = {
   codex: { ids: ['codex', 'codex-retry'], output: 'final-message' },
 };
 
-export function simulate(reviewer, agent, attempts) {
-  const context = { matrix: { agent }, steps: {}, failed: false };
+const resolve = (value, context) =>
+  value.startsWith('${{') ? String(compute(value, context)) : value;
+
+export function simulate(reviewer, agent, attempts, vars = {}) {
+  const context = { matrix: { agent }, steps: {}, vars, env: {}, failed: false };
+  for (const [key, value] of Object.entries(jobEnv('reviewer')))
+    context.env[key] = resolve(value, context);
   const ran = [];
   const logged = [];
+  const models = [];
   let findings;
   const start = reviewer.findIndex((step) => step.id === 'claude');
   for (const step of reviewer.slice(start)) {
@@ -134,17 +151,18 @@ export function simulate(reviewer, agent, attempts) {
     if (owner) {
       const verdict = attempts.shift();
       outcome = verdict === undefined ? 'failure' : 'success';
+      const model = step.with.model ?? /--model (\$\{\{[^}]*\}\})/.exec(step.claudeArgs ?? '')?.[1];
+      models.push({ id: step.id, model: model && resolve(model, context) });
       if (verdict) outputs = { [owner.output]: JSON.stringify({ verdict }) };
     }
     if (step.env.ATTEMPT) {
       const env = {};
-      for (const [key, value] of Object.entries(step.env))
-        env[key] = value.startsWith('${{') ? String(compute(value, context)) : value;
+      for (const [key, value] of Object.entries(step.env)) env[key] = resolve(value, context);
       logged.push(env);
     }
     if (step.env.FINDINGS) findings = evaluate(step.env.FINDINGS, context);
     if (step.id) context.steps[step.id] = { outcome, outputs };
     if (outcome === 'failure' && !step.continueOnError) context.failed = true;
   }
-  return { ran, logged, findings, failed: context.failed, left: attempts.length };
+  return { ran, logged, models, findings, failed: context.failed, left: attempts.length };
 }
