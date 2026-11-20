@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
-import { evaluate, job, simulate, steps } from './pipeline-steps.mjs';
+import { fileURLToPath } from 'node:url';
+import { evaluate, job, jobEnv, simulate, steps } from './pipeline-steps.mjs';
 
 const dirs = [];
 after(() => {
@@ -20,6 +29,7 @@ const byId = (id) => {
 const isOutcome = (step) => step.name?.startsWith('Codex') && step.env.ATTEMPT !== undefined;
 const outcomeSteps = () => reviewer.filter(isOutcome);
 const model = 'global.openai.gpt-6.1-sol';
+const fallback = 'global.openai.gpt-6-sol';
 const secret = 'SECRET-DIFF-DETAIL';
 
 function outcome(lines, env = {}) {
@@ -204,7 +214,7 @@ test('each attempt gets the same outcome step, and nothing uploads the rollout',
       },
       {
         ATTEMPT: '2',
-        MODEL: '${{ env.CODEX_MODEL }}',
+        MODEL: '${{ env.CODEX_FALLBACK_MODEL }}',
         OUTCOME: '${{ steps.codex-retry.outcome }}',
         HAS_FINDINGS: "${{ steps.codex-retry.outputs.final-message != '' }}",
       },
@@ -216,18 +226,21 @@ test('each attempt gets the same outcome step, and nothing uploads the rollout',
   assert.doesNotMatch(job('reviewer'), /path:[^\n]*(codex-home|rollout)/);
 });
 
-test('the retry runs the same action, inputs and model, and only the first attempt may fail', () => {
+test('the retry runs the same action and inputs on the fallback model, and only the first attempt may fail', () => {
   const codex = byId('codex');
   const retry = byId('codex-retry');
-  assert.match(
-    job('reviewer'),
-    /\n {4}env:\n(?: {6}[A-Z_]+: .*\n)* {6}CODEX_MODEL: \$\{\{ vars\.CODEX_BEDROCK_MODEL \|\| 'global\.openai\.gpt-6\.1-sol' \}\}\n/
+  const env = jobEnv('reviewer');
+  assert.equal(env.CODEX_MODEL, "${{ vars.CODEX_BEDROCK_MODEL || 'global.openai.gpt-6.1-sol' }}");
+  assert.equal(
+    env.CODEX_FALLBACK_MODEL,
+    "${{ vars.CODEX_BEDROCK_FALLBACK_MODEL || vars.CODEX_BEDROCK_MODEL || 'global.openai.gpt-6.1-sol' }}"
   );
   assert.match(codex.uses, /^openai\/codex-action@[0-9a-f]{40}$/);
   assert.equal(retry.uses, codex.uses);
   assert.deepEqual(retry.env, codex.env);
-  assert.deepEqual(retry.with, codex.with);
+  assert.deepEqual({ ...retry.with, model: undefined }, { ...codex.with, model: undefined });
   assert.equal(codex.with.model, '${{ env.CODEX_MODEL }}');
+  assert.equal(retry.with.model, '${{ env.CODEX_FALLBACK_MODEL }}');
   assert.equal(codex.with['codex-home'], '${{ runner.temp }}/codex-home');
   assert.equal(codex.with['output-file'], undefined);
   assert.equal(codex.continueOnError, true);
@@ -244,7 +257,7 @@ test('a verdict on the first attempt skips the retry', () => {
   assert.ok(!run.ran.includes('codex-retry'));
   assert.ok(!run.ran.includes('Codex retry outcome'));
   assert.deepEqual(run.logged, [
-    { ATTEMPT: '1', MODEL: '', OUTCOME: 'success', HAS_FINDINGS: 'true' },
+    { ATTEMPT: '1', MODEL: model, OUTCOME: 'success', HAS_FINDINGS: 'true' },
   ]);
   assert.equal(JSON.parse(run.findings).verdict, 'approved');
   assert.equal(run.failed, false);
@@ -325,4 +338,85 @@ test('the Claude and Codex paths do not run or read each other', () => {
     /^(claude|Claude)/.test(entry.id ?? entry.name ?? '')
   ))
     assert.doesNotMatch(step.raw, /codex/i);
+});
+
+test('without CODEX_BEDROCK_FALLBACK_MODEL the retry runs on the primary model, as before', () => {
+  for (const [vars, primary] of [
+    [{}, model],
+    [{ CODEX_BEDROCK_MODEL: 'global.openai.gpt-7-sol' }, 'global.openai.gpt-7-sol'],
+  ]) {
+    const run = simulate(reviewer, 'codex', [undefined, 'approved'], vars);
+    assert.deepEqual(run.models, [
+      { id: 'codex', model: primary },
+      { id: 'codex-retry', model: primary },
+    ]);
+    assert.deepEqual(
+      run.logged.map(({ ATTEMPT, MODEL }) => [ATTEMPT, MODEL]),
+      [
+        ['1', primary],
+        ['2', primary],
+      ]
+    );
+    assert.equal(JSON.parse(run.findings).verdict, 'approved');
+  }
+});
+
+test('with CODEX_BEDROCK_FALLBACK_MODEL only the retry runs on it, and its log line names it', () => {
+  for (const vars of [
+    { CODEX_BEDROCK_FALLBACK_MODEL: fallback },
+    { CODEX_BEDROCK_FALLBACK_MODEL: fallback, CODEX_BEDROCK_MODEL: 'global.openai.gpt-7-sol' },
+  ]) {
+    const primary = vars.CODEX_BEDROCK_MODEL ?? model;
+    const run = simulate(reviewer, 'codex', [undefined, 'denied'], vars);
+    assert.deepEqual(run.models, [
+      { id: 'codex', model: primary },
+      { id: 'codex-retry', model: fallback },
+    ]);
+    assert.deepEqual(
+      run.logged.map(({ ATTEMPT, MODEL }) => [ATTEMPT, MODEL]),
+      [
+        ['1', primary],
+        ['2', fallback],
+      ]
+    );
+    assert.equal(JSON.parse(run.findings).verdict, 'denied');
+    const first = simulate(reviewer, 'codex', ['approved'], vars);
+    assert.deepEqual(first.models, [{ id: 'codex', model: primary }]);
+    assert.ok(!first.ran.includes('codex-retry'));
+    const none = simulate(reviewer, 'codex', [undefined, undefined], vars);
+    assert.equal(none.failed, true);
+    assert.equal(none.findings, undefined);
+  }
+  const log = outcome(rejected, { ATTEMPT: '2', MODEL: fallback });
+  assert.match(log.stdout, new RegExp(`^codex attempt 2, ${fallback.replaceAll('.', '\\.')}: `));
+});
+
+test('nothing but the Codex retry reads CODEX_BEDROCK_FALLBACK_MODEL', () => {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const files = (dir) =>
+    readdirSync(join(root, dir), { withFileTypes: true, recursive: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => join(entry.parentPath, entry.name));
+  const readers = files('.github').filter((file) =>
+    readFileSync(file, 'utf8').includes('CODEX_BEDROCK_FALLBACK_MODEL')
+  );
+  assert.deepEqual(readers, [join(root, '.github/workflows/pipeline.yml')]);
+  assert.equal(job('reviewer').match(/CODEX_BEDROCK_FALLBACK_MODEL/g).length, 1);
+  assert.equal(readFileSync(readers[0], 'utf8').match(/CODEX_BEDROCK_FALLBACK_MODEL/g).length, 1);
+  assert.deepEqual(
+    Object.entries(jobEnv('reviewer'))
+      .filter(([, value]) => value.includes('CODEX_BEDROCK_FALLBACK_MODEL'))
+      .map(([key]) => key),
+    ['CODEX_FALLBACK_MODEL']
+  );
+  assert.deepEqual(
+    reviewer
+      .filter((step) => step.raw.includes('CODEX_FALLBACK_MODEL'))
+      .map((step) => step.id ?? step.name),
+    ['codex-retry', 'Codex retry outcome']
+  );
+  const vars = { CODEX_BEDROCK_FALLBACK_MODEL: fallback };
+  const claude = simulate(reviewer, 'claude', [undefined, 'approved'], vars);
+  assert.deepEqual(claude, simulate(reviewer, 'claude', [undefined, 'approved']));
+  assert.ok(!claude.models.some((entry) => entry.model === fallback));
 });

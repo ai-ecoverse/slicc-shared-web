@@ -780,6 +780,7 @@ jobs:
       CLAUDE_MODEL: ${{ vars.CERT_BEDROCK_MODEL || 'global.anthropic.claude-opus-5-5' }}
       CLAUDE_FALLBACK_MODEL: ${{ vars.CERT_BEDROCK_FALLBACK_MODEL || 'global.anthropic.claude-sonnet-5-5' }}
       CODEX_MODEL: ${{ vars.CODEX_BEDROCK_MODEL || 'global.openai.gpt-6.1-sol' }}
+      CODEX_FALLBACK_MODEL: ${{ vars.CODEX_BEDROCK_FALLBACK_MODEL || vars.CODEX_BEDROCK_MODEL || 'global.openai.gpt-6.1-sol' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -1054,7 +1055,7 @@ jobs:
           prompt-file: ${{ runner.temp }}/review/prompt.txt
           output-schema: ${{ env.FINDINGS_SCHEMA }}
           codex-home: ${{ runner.temp }}/codex-home
-          model: ${{ env.CODEX_MODEL }}
+          model: ${{ env.CODEX_FALLBACK_MODEL }}
           sandbox: danger-full-access
           safety-strategy: ${{ runner.environment == 'github-hosted' && 'drop-sudo' || 'unsafe' }}
           allow-bot-users: ${{ needs.lint.outputs.codex-bots }}
@@ -1063,7 +1064,7 @@ jobs:
         if: '!cancelled() && steps.codex-retry.outcome != ''skipped'''
         env:
           ATTEMPT: '2'
-          MODEL: ${{ env.CODEX_MODEL }}
+          MODEL: ${{ env.CODEX_FALLBACK_MODEL }}
           OUTCOME: ${{ steps.codex-retry.outcome }}
           HAS_FINDINGS: ${{ steps.codex-retry.outputs.final-message != '' }}
         run: *codex-outcome
