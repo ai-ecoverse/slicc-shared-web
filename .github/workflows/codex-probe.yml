@@ -58,10 +58,9 @@ jobs:
       matrix:
         model:
           - global.openai.gpt-6.1-sol
+          - global.openai.gpt-6.2-astra
+          - global.openai.gpt-6.2-sol
           - global.openai.gpt-6-sol
-          - global.openai.gpt-6.1-terra
-          - us.openai.gpt-6.1-sol
-          - global.openai.gpt-6-astra
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
