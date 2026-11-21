@@ -137,7 +137,7 @@ The commands in `lint`, `test`, `deploy`, `review-browser` and `after-release` r
 |---|---|---|
 | `node-version` | `24` | |
 | `runs-on` | `cloud-run-job` | every job but `release`, which runs on `ubuntu-latest` because npm's trusted publishing takes OIDC tokens only from GitHub-hosted runners; a fork's pull request runs on `ubuntu-latest` too, so fork code never reaches the pool |
-| `timeout-minutes` | `20` | `lint`, `deploy`, each shard and `release`; a review gets `review-timeout-minutes` |
+| `timeout-minutes` | `20` | `lint`, `deploy`, each shard, and `release` unless `release-timeout-minutes` is set; a review gets `review-timeout-minutes` |
 | `release-timeout-minutes` | `0` | the cap for `release` alone when above 0, such as a release that waits for npm to serve packages it just published; `0` keeps `timeout-minutes` |
 | `lint` | `npm run lint` | |
 | `chrome` | stable | a Chrome for Testing version for `slicc-cdp install-browser` |
