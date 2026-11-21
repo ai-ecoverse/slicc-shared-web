@@ -12,6 +12,9 @@ on:
       timeout-minutes:
         type: number
         default: 20
+      release-timeout-minutes:
+        type: number
+        default: 0
       lint:
         type: string
         default: npm run lint
@@ -1292,7 +1295,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: ${{ inputs.release-environment }}
-    timeout-minutes: ${{ inputs.timeout-minutes }}
+    timeout-minutes: ${{ inputs.release-timeout-minutes > 0 && inputs.release-timeout-minutes || inputs.timeout-minutes }}
     concurrency:
       group: release-${{ github.ref_name }}
       cancel-in-progress: false
