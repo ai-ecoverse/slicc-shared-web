@@ -905,6 +905,7 @@ jobs:
           Answer with JSON that matches the schema you were given:
           - verdict: "approved" or "denied".
           - summary: a few sentences on the change and your verdict.
+            If one of pr.json's labels is exactly private-fix, the change fixes something kept private until release: the summary says only what the change does, never what was exposed or broken before it, with no exploit steps or reproduction detail. Report every finding in full, worded the same way: the change it needs, not the old exposure.
           - comments: findings on lines the pull request adds or changes, with path relative to the repository root and the line number in the head.
           - issues: problems worth tracking outside this pull request, each with repo as owner/name, a title, a body and security.
             Leave out any that $RUNNER_TEMP/review/context/issues.json already has open, even under another title.
