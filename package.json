@@ -76,7 +76,7 @@
   },
   "devDependencies": {
     "@ai-ecoverse/slicc-browsers": "1.40.1",
-    "@ai-ecoverse/slicc-cdp": "2.1.32",
+    "@ai-ecoverse/slicc-cdp": "2.1.33",
     "@biomejs/biome": "2.6.8",
     "lefthook": "2.2.2",
     "monocart-coverage-reports": "3.2.1",
